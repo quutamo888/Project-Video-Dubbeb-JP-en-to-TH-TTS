@@ -1,0 +1,26 @@
+deep-translator>=1.11.4
+faster-whisper>=1.2.1
+ffmpeg-python>=0.2.0
+moviepy>=2.2.1
+openai>=2.14.0
+pydub>=0.25.1
+python-dotenv>=1.2.1
+requests>=2.32.5
+numpy<2.4
+librosa>=0.10.0
+scipy>=1.10.0
+customtkinter>=5.2.2
+packaging
+pillow
+demucs
+f5-tts-th
+soundfile
+psutil
+gputil
+transformers
+edge-tts>=7.2.7
+
+# PyTorch with CUDA 12.1 support
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchaudio>=2.0.0
