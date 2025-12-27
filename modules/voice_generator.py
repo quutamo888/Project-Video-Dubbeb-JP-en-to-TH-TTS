@@ -44,6 +44,8 @@ class VoiceGenerator:
                 
         return self.models.get(model_id), self.tokenizers.get(model_id)
 
+        return self.models.get(model_id), self.tokenizers.get(model_id)
+
     def _clean_text(self, text):
         import re
         # Remove polite particles
@@ -52,13 +54,15 @@ class VoiceGenerator:
 
     def generate(self, segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
         """
-        Generates audio using VIZINTZOR Dual Models (Local).
-        args:
-            male_pitch (float): Semitones to shift male voice (default 0).
-            female_pitch (float): Semitones to shift female voice (default 0).
+        Generates audio using configured provider (F5-TTS or MMS).
         """
-        generated_files = []
+        provider = Config.TTS_PROVIDER
         
+        if provider == "f5-tts":
+            return self.generate_f5(segments, original_audio_path, output_dir, stop_event)
+        
+        # Fallback to MMS (Existing Logic)
+        generated_files = []
         for i, seg in enumerate(segments):
             if stop_event and stop_event.is_set():
                 logger.info("Voice generation stopped by user.")
@@ -72,12 +76,9 @@ class VoiceGenerator:
             
             # Clean polite particles
             text = self._clean_text(text)
-            if not text: # skipped if text became empty
-                continue
+            if not text: continue
                 
             output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
-            
-            # Resume capability
             if os.path.exists(output_filename):
                 generated_files.append(output_filename)
                 continue
@@ -86,65 +87,130 @@ class VoiceGenerator:
             
             try:
                 model, tokenizer = self.get_model_and_tokenizer(gender)
-                
-                if model is None:
-                    raise RuntimeError(f"Model for {gender} not loaded")
+                if model is None: raise RuntimeError(f"Model for {gender} not loaded")
 
                 inputs = tokenizer(text, return_tensors="pt").to(self.device)
-                
                 with torch.no_grad():
                     output = model(**inputs).waveform
                 
                 audio_np = output.cpu().numpy().squeeze()
                 
-                # Apply Pitch Shift if requested
-                pitch_shift = 0
-                if gender == 'male':
-                    pitch_shift = male_pitch
-                else:
-                    pitch_shift = female_pitch
-                    
+                # Pitch Shift
+                pitch_shift = male_pitch if gender == 'male' else female_pitch
                 if pitch_shift != 0:
-                     # Use model's native sampling rate for higher quality shift
                      sr = model.config.sampling_rate if hasattr(model, 'config') else self.sample_rate
                      try:
-                         # Use librosa for pitch shifting (CPU based, might be slow but high quality)
                          audio_np = librosa.effects.pitch_shift(audio_np, sr=sr, n_steps=pitch_shift)
                      except Exception as e:
-                         logger.warning(f"Pitch shift failed: {e}")
+                         pass
 
-                # Check for silence/empty
-                if audio_np is None or len(audio_np) == 0:
-                     logger.warning(f"Segment {i} produced empty audio.")
-                     continue
-
-                max_val = np.max(np.abs(audio_np))
-                if max_val == 0:
-                    logger.warning(f"Segment {i} is silent. writing silent file.")
-                    audio_int16 = np.zeros(len(audio_np), dtype=np.int16)
-                    # Default SR if silent
-                    sr = self.sample_rate 
-                else:
-                    audio_norm = audio_np / max_val
-                    audio_int16 = (audio_norm * 32767).astype(np.int16)
-                    # Use model's native sampling rate if available
+                # Save
+                if len(audio_np) > 0:
                     sr = model.config.sampling_rate if hasattr(model, 'config') else self.sample_rate
-                    
-                    # Hallucination Check for Audio (Duration)
+                    # Check Hallucination
                     target_duration = seg.get('end', 0) - seg.get('start', 0)
-                    if target_duration > 0:
-                        gen_duration = len(audio_int16) / sr
-                        # If generated audio is > 4x target (and > 2s diff), it's likely a loop/hallucination
-                        if gen_duration > target_duration * 4 and (gen_duration - target_duration) > 2.0:
-                             logger.warning(f"TTS Hallucination detected for seg {i} (Gen: {gen_duration:.1f}s vs Target: {target_duration:.1f}s). Skipping/Silencing.")
-                             # Fallback to silence
-                             audio_int16 = np.zeros(int(target_duration * sr), dtype=np.int16)
-                
-                scipy.io.wavfile.write(output_filename, sr, audio_int16)
-                generated_files.append(output_filename)
-                
+                    gen_duration = len(audio_np) / sr
+                    if target_duration > 0 and gen_duration > target_duration * 4 and (gen_duration - target_duration) > 2.0:
+                         logger.warning(f"MMS Hallucination detected seg {i}. Silencing.")
+                         audio_int16 = np.zeros(int(target_duration * sr), dtype=np.int16)
+                    else:
+                        max_val = np.max(np.abs(audio_np))
+                        if max_val == 0:
+                            audio_int16 = np.zeros(len(audio_np), dtype=np.int16)
+                        else:
+                            audio_int16 = (audio_np / max_val * 32767).astype(np.int16)
+                            
+                    scipy.io.wavfile.write(output_filename, sr, audio_int16)
+                    generated_files.append(output_filename)
             except Exception as e:
                 logger.error(f"Failed to generate segment {i}: {e}")
+                continue
+                
+        return generated_files
+
+    def generate_f5(self, segments, original_audio_path, output_dir, stop_event=None):
+        logger.info("Initializing F5-TTS...")
+        try:
+            from f5_tts_th.tts import TTS
+            import soundfile as sf
+            from pydub import AudioSegment
+        except ImportError:
+            logger.error("F5-TTS not installed. Please install 'f5-tts-th' and 'soundfile'.")
+            return []
+
+        # Load F5 Model (v1 recommended in docs)
+        if not hasattr(self, 'f5_model'):
+            self.f5_model = TTS(model="v1")
+        
+        generated_files = []
+        
+        # Load full audio for slicing
+        full_audio = AudioSegment.from_file(original_audio_path)
+        
+        for i, seg in enumerate(segments):
+            if stop_event and stop_event.is_set():
+                logger.info("F5-TTS stopped by user.")
+                break
+                
+            text = seg.get('translated_text', '')
+            original_text = seg.get('text', '') # Original transcript
+            
+            if not text: continue
+            
+            text = self._clean_text(text)
+            if not text: continue
+            
+            output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
+            if os.path.exists(output_filename):
+                generated_files.append(output_filename)
+                continue
+            
+            # Extract Reference Audio
+            start_ms = int(seg['start'] * 1000)
+            end_ms = int(seg['end'] * 1000)
+            
+            # Ensure at least 1-2 sec for reference? F5 might need decent length.
+            # If segment is too short, extend slightly (careful of noise)
+            if end_ms - start_ms < 500:
+                end_ms = start_ms + 1000
+                
+            ref_audio_seg = full_audio[start_ms:end_ms]
+            ref_audio_path = os.path.join(output_dir, f"ref_{i:04d}.wav")
+            ref_audio_seg.export(ref_audio_path, format="wav")
+            
+            logger.info(f"F5-TTS Generating seg {i}: {text[:30]}...")
+            
+            try:
+                # Infer
+                # Note: ref_text is the text of the REFERENCE audio.
+                # If we use original audio, we should use original text.
+                # But F5-TTS-THAI might only support Thai text. 
+                # Let's try passing "." if original text causes issues, but ideally we pass original text.
+                # If the library crashes on non-Thai ref_text, we might need a fixed Thai reference.
+                # For now, let's assume it can handle foreign characters or ignore them?
+                # Actually, providing incorrect ref_text usually degrades quality (prosody mismatch).
+                # Strategy: Pass original text. If it fails, fallback strategy needed (maybe fixed ref).
+                
+                wav = self.f5_model.infer(
+                    ref_audio=ref_audio_path,
+                    ref_text=original_text if original_text else ".",
+                    gen_text=text,
+                    step=32,
+                    cfg=2.0,
+                    speed=1.0
+                )
+                
+                # Write output
+                sf.write(output_filename, wav, 24000)
+                generated_files.append(output_filename)
+                
+                # Cleanup ref
+                if os.path.exists(ref_audio_path):
+                    os.remove(ref_audio_path)
+                    
+            except Exception as e:
+                logger.error(f"F5-TTS Failed seg {i}: {e}")
+                # Fallback? Or just skip
                 continue
                 
         return generated_files

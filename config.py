@@ -29,7 +29,7 @@ class Config:
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3") # or mistral, gemma
 
     # TTS Settings
-    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge-tts") # "edge-tts", "xtts"
+    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "f5-tts") # "f5-tts", "mms", "edge-tts"
     EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "th-TH-PremwadeeNeural") # th-TH-PremwadeeNeural, th-TH-NiwatNeural
     
     @staticmethod

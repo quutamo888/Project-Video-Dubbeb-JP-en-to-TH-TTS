@@ -41,7 +41,7 @@ def transcribe_audio(audio_path, model_size="large-v3", device="auto"):
             })
             
         logger.info(f"Transcription complete. Detected language: {info.language}")
-        return result
+        return result, info.language
         
     except Exception as e:
         logger.error(f"Transcription failed: {str(e)}")

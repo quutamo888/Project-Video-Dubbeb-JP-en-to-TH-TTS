@@ -15,7 +15,8 @@ from modules.vocal_isolator import separate_vocals
 
 def run_pipeline(input_file, output_file, language="th", 
                  progress_callback=None, log_callback=None,
-                 male_pitch=0.0, female_pitch=0.0, stop_event=None):
+                 male_pitch=0.0, female_pitch=0.0, 
+                 translation_temperature=0.3, stop_event=None):
     """
     Executes the full dubbing pipeline.
     """
@@ -64,7 +65,8 @@ def run_pipeline(input_file, output_file, language="th",
         
         log("Transcribing audio...")
         progress(0.15, "Transcribing...")
-        segments = transcribe_audio(audio_path, model_size=Config.WHISPER_MODEL_SIZE)
+        segments, source_lang = transcribe_audio(audio_path, model_size=Config.WHISPER_MODEL_SIZE)
+        log(f"Detected Source Language: {source_lang}")
         
         check_stop()
         # 3. Detect Gender
@@ -85,7 +87,13 @@ def run_pipeline(input_file, output_file, language="th",
         # 4. Translate Text
         log(f"Translating to {language}...")
         progress(0.45, "Translating...")
-        translated_segments = translate_text(segments, target_lang=language, stop_event=stop_event)
+        translated_segments = translate_text(
+            segments, 
+            target_lang=language, 
+            source_lang=source_lang,
+            stop_event=stop_event, 
+            temperature=translation_temperature
+        )
         
         check_stop()
         # 5. Generate Speech
@@ -120,8 +128,7 @@ def run_pipeline(input_file, output_file, language="th",
         traceback.print_exc()
         raise e
     finally:
-        # cleanup_temp(Config.TEMP_DIR)
-        pass
+        cleanup_temp(Config.TEMP_DIR)
 
 def main():
     setup_logging()

@@ -24,6 +24,10 @@ dependencies = [
     "packaging",
     "pillow",
     "demucs",
+    "f5-tts-th",
+    "soundfile",
+    "psutil",
+    "gputil",
 ]
 
 [[tool.uv.index]]

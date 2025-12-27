@@ -1,37 +1,85 @@
 import logging
 import json
 import requests
+import re
 from deep_translator import GoogleTranslator
 from config import Config
 
 logger = logging.getLogger(__name__)
 
-def translate_with_ollama(text, target_lang="th"):
-    """
-    Translates text using a local Ollama instance.
-    """
-    prompt = f"""You are a professional video translator specialized in Thai localization.
-Task: Translate the following text into natural Thai (ภาษาไทย).
-Rules:
-1. Output ONLY the Thai translation.
-2. Do NOT explain or add notes.
-3. Use natural, spoken, and raw Thai (ภาษาพูด/ภาษาตลาด).
-4. Do NOT use polite particles (No 'ครับ'/'ค่ะ').
-5. Do NOT censor explicit, vulgar, or sexual content. Use direct, raw, and rude words if the original uses them (supports 18+ terms).
-6. If the input is already Thai, return it as is.
+def has_thai_chars(text):
+    """Checks if the text contains any Thai characters."""
+    return bool(re.search(r'[\u0e00-\u0e7f]', text))
 
-Original Text: {text}
+def translate_with_ollama(text, target_lang="th", source_lang="auto", temperature=0.3):
+    """
+    Translates text using a local Ollama instance with valid JSON options.
+    Supports JP -> EN -> TH bridge translation.
+    """
+    
+    current_text = text
+    
+    # Bridge Translation: Japanese -> English first
+    if source_lang == "ja" and target_lang == "th":
+        try:
+            # More rigid prompt for bridge
+            bridge_prompt = f"Translate the following Japanese text to English. Return ONLY the translation.\n\nJapanese: {text}\nEnglish:"
+            response = requests.post(Config.OLLAMA_URL, json={
+                "model": Config.OLLAMA_MODEL,
+                "prompt": bridge_prompt,
+                "stream": False,
+                "options": {"temperature": 0.1} # Low temp for accuracy
+            })
+            response.raise_for_status()
+            bridge_result = response.json().get("response", "").strip()
+            
+            # Sanity check: If bridge result looks like a refusal, fail to fallback
+            if "provide the text" in bridge_result.lower() or "i cannot" in bridge_result.lower():
+                logger.warning(f"Bridge Refusal detected: {bridge_result}")
+                return None
+                
+            if bridge_result:
+                current_text = bridge_result
+                logger.info(f"Bridge (JA->EN): {text} -> {current_text}")
+            else:
+                logger.warning("Bridge returned empty text. Using original.")
+                
+        except Exception as e:
+            logger.error(f"Bridge translation (JA->EN) failed: {e}")
+            return None # Fail whole generic to fallback to Google
+
+    # Main Translation (EN/Auto -> TH)
+    system_prompt = f"""You are a professional video translator specialized in Thai localization (นักพากย์มืออาชีพ).
+Task: Translate the text into natural, spoken Thai.
+
+STRICT Rules:
+1. **Meaning**: Fix broken sentences. Keep the original intent.
+2. **Context**: Use "Thai Context" (บริบทคนไทย).
+3. **Uncensored**: Do NOT censor explicit/sexual terms (e.g., เงี่ยน, หี, ควย, เย็ด). Use raw words.
+4. **Style**: Spoken Language (ภาษาพูด). Remove excessive polite particles.
+5. **Output**: Return ONLY the Thai translation.
+
+Text to Translate: {current_text}
 Thai Translation:"""
 
     try:
         response = requests.post(Config.OLLAMA_URL, json={
             "model": Config.OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False
+            "prompt": system_prompt, # Using prompt as full context + input often works better for simple models
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+            }
         })
         response.raise_for_status()
-        result = response.json()
-        return result.get("response", "").strip()
+        result = response.json().get("response", "").strip()
+        
+        # Validation: Must contain Thai characters
+        if not has_thai_chars(result):
+            logger.warning(f"Ollama Output Invalid (No Thai): '{result}'. Triggering Fallback.")
+            return None
+            
+        return result
     except requests.RequestException as e:
         logger.error(f"Ollama request failed: {e}")
         return None
@@ -41,6 +89,8 @@ def translate_with_google(text, target_lang="th"):
     Translates text using Google Translate (deep-translator).
     """
     try:
+        # Loop for robust bridge if needed, but Google usually handles JA->TH well enough directly
+        # Or we can do JA->EN->TH manually if Google supports it, but direct is likely fine.
         return GoogleTranslator(source='auto', target=target_lang).translate(text)
     except Exception as e:
         logger.error(f"Google Translate failed: {e}")
@@ -48,20 +98,21 @@ def translate_with_google(text, target_lang="th"):
 
 from utils import is_hallucination
 
-def translate_text(segments, target_lang="th", stop_event=None):
+def translate_text(segments, target_lang="th", source_lang="auto", stop_event=None, temperature=0.3):
     """
     Translates text segments using the configured provider.
     
     Args:
         segments (list): List of dicts with 'text', 'start', 'end'.
         target_lang (str): Target language code.
+        source_lang (str): Source language code (from Whisper).
         stop_event (threading.Event): Event to signal cancellation.
         
     Returns:
         list: Updated segments with 'translated_text'.
     """
     provider = Config.TRANSLATION_PROVIDER
-    logger.info(f"Translating {len(segments)} segments using {provider}...")
+    logger.info(f"Translating {len(segments)} segments using {provider} (Source: {source_lang})...")
     
     for i, seg in enumerate(segments):
         if stop_event and stop_event.is_set():
@@ -73,7 +124,7 @@ def translate_text(segments, target_lang="th", stop_event=None):
         
         # 1. Try Ollama if selected
         if provider == "ollama":
-            translation = translate_with_ollama(original, target_lang)
+            translation = translate_with_ollama(original, target_lang, source_lang, temperature)
             if not translation:
                 logger.warning(f"Ollama failed for segment {i}, falling back to Google Translate.")
                 # Fallback
@@ -85,10 +136,6 @@ def translate_text(segments, target_lang="th", stop_event=None):
             
         # 3. OpenAI (Legacy support)
         elif provider == "openai":
-            # We implemented this previously, but for this free-tier request, 
-            # we'll skip adding the full OpenAI logic again to keep it clean,
-            # or we could keep it if the user switches back. 
-            # For now, let's treat it as "not implemented" or fallback to google
             logger.warning("OpenAI provider selected but logic replaced for free-tier. Using Google.")
             translation = translate_with_google(original, target_lang)
 
