@@ -5,6 +5,41 @@ import threading
 import sys
 import os
 import psutil
+
+# Monkey-patch torchaudio.load BEFORE importing modules that use it
+# This avoids torchcodec issues on Windows with PyTorch nightly
+try:
+    import torch
+    import torchaudio
+    import soundfile as sf
+    import librosa
+    import numpy as np
+    
+    _original_torchaudio_load = torchaudio.load
+    
+    def _patched_torchaudio_load(filepath, *args, **kwargs):
+        try:
+            waveform, sample_rate = sf.read(filepath, dtype='float32')
+            waveform = torch.from_numpy(waveform)
+            if waveform.dim() == 1:
+                waveform = waveform.unsqueeze(0)
+            elif waveform.dim() == 2:
+                waveform = waveform.T
+            return waveform, sample_rate
+        except Exception:
+            try:
+                waveform, sample_rate = librosa.load(filepath, sr=None, mono=False)
+                waveform = torch.from_numpy(waveform)
+                if waveform.dim() == 1:
+                    waveform = waveform.unsqueeze(0)
+                return waveform, sample_rate
+            except Exception:
+                return _original_torchaudio_load(filepath, *args, **kwargs)
+    
+    torchaudio.load = _patched_torchaudio_load
+except Exception:
+    pass
+
 try:
     import GPUtil
     HAS_GPUTIL = True
@@ -86,9 +121,53 @@ class App(ctk.CTk):
         self.lbl_temp_val.grid(row=2, column=2, padx=10, pady=10)
         self.slider_temp.configure(command=lambda val: self.lbl_temp_val.configure(text=f"{val:.1f}"))
 
+        # Translation Provider
+        self.lbl_translator = ctk.CTkLabel(self.frame_settings, text="Translation Provider:")
+        self.lbl_translator.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.combo_translator = ctk.CTkComboBox(
+            self.frame_settings, 
+            values=["ollama (Flexible, needs Ollama)", "local-transformer (Fast, Local)", "google (Fast, Online)"],
+            state="readonly"
+        )
+        self.combo_translator.set("ollama (Flexible, needs Ollama)")
+        self.combo_translator.grid(row=3, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
+        
+        # TTS Provider
+        self.lbl_tts = ctk.CTkLabel(self.frame_settings, text="Voice Generator (TTS):")
+        self.lbl_tts.grid(row=4, column=0, padx=10, pady=10, sticky="w")
+        self.combo_tts = ctk.CTkComboBox(
+            self.frame_settings,
+            values=["f5-tts (Voice Clone, Slow)", "edge-tts (Natural, Fast)", "mms (Basic, Local)"],
+            state="readonly"
+        )
+        self.combo_tts.set("edge-tts (Natural, Fast)")
+        self.combo_tts.grid(row=4, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
+        
+        # Gender Detection Method
+        self.lbl_gender = ctk.CTkLabel(self.frame_settings, text="Gender Detection:")
+        self.lbl_gender.grid(row=5, column=0, padx=10, pady=10, sticky="w")
+        self.combo_gender = ctk.CTkComboBox(
+            self.frame_settings,
+            values=["audio (Fast, Pitch)", "visual (Accurate, Face)", "hybrid (Best, Slow)"],
+            state="readonly"
+        )
+        self.combo_gender.set("audio (Fast, Pitch)")
+        self.combo_gender.grid(row=5, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
+        
+        # Audio Gender Model (ML vs Pitch)
+        self.lbl_audio_model = ctk.CTkLabel(self.frame_settings, text="Audio Model:")
+        self.lbl_audio_model.grid(row=6, column=0, padx=10, pady=10, sticky="w")
+        self.combo_audio_model = ctk.CTkComboBox(
+            self.frame_settings,
+            values=["ml (AI, Accurate)", "pitch (Hz, Fast)"],
+            state="readonly"
+        )
+        self.combo_audio_model.set("ml (AI, Accurate)")
+        self.combo_audio_model.grid(row=6, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
+
         # --- System Monitor ---
         self.frame_monitor = ctk.CTkFrame(self)
-        self.frame_monitor.grid(row=3, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
+        self.frame_monitor.grid(row=7, column=0, columnspan=3, padx=20, pady=10, sticky="ew")
         self.frame_monitor.grid_columnconfigure(1, weight=1)
         
         # Header
@@ -194,6 +273,38 @@ class App(ctk.CTk):
         female_pitch = self.slider_fem.get()
         temperature = self.slider_temp.get()
         
+        # Extract provider selections
+        translator_choice = self.combo_translator.get()
+        tts_choice = self.combo_tts.get()
+        gender_choice = self.combo_gender.get()
+        audio_model_choice = self.combo_audio_model.get()
+        
+        # Map friendly names to provider codes
+        translator_map = {
+            "ollama (Flexible, needs Ollama)": "ollama",
+            "local-transformer (Fast, Local)": "local-transformer",
+            "google (Fast, Online)": "google"
+        }
+        tts_map = {
+            "f5-tts (Voice Clone, Slow)": "f5-tts",
+            "edge-tts (Natural, Fast)": "edge-tts",
+            "mms (Basic, Local)": "mms"
+        }
+        gender_map = {
+            "audio (Fast, Pitch)": "audio",
+            "visual (Accurate, Face)": "visual",
+            "hybrid (Best, Slow)": "hybrid"
+        }
+        audio_model_map = {
+            "ml (AI, Accurate)": "ml",
+            "pitch (Hz, Fast)": "pitch"
+        }
+        
+        translator_provider = translator_map.get(translator_choice, "ollama")
+        tts_provider = tts_map.get(tts_choice, "edge-tts")
+        gender_method = gender_map.get(gender_choice, "audio")
+        audio_model = audio_model_map.get(audio_model_choice, "ml")
+        
         self.btn_start.configure(state="disabled", text="Running...")
         self.btn_stop.configure(state="normal")
         self.progressbar.set(0)
@@ -201,7 +312,10 @@ class App(ctk.CTk):
         
         self.stop_event = threading.Event()
         
-        thread = threading.Thread(target=self.run_process, args=(input_file, output_file, male_pitch, female_pitch, temperature))
+        thread = threading.Thread(
+            target=self.run_process, 
+            args=(input_file, output_file, male_pitch, female_pitch, temperature, translator_provider, tts_provider, gender_method, audio_model)
+        )
         thread.start()
 
     def stop_process(self):
@@ -210,8 +324,21 @@ class App(ctk.CTk):
             self.log("Stopping... please wait for current step to finish.")
             self.btn_stop.configure(state="disabled")
 
-    def run_process(self, input_file, output_file, male_pitch, female_pitch, temperature):
+    def run_process(self, input_file, output_file, male_pitch, female_pitch, temperature, translator_provider, tts_provider, gender_method, audio_model):
+        # Temporarily override Config settings with GUI selections
+        from config import Config
+        original_translator = Config.TRANSLATION_PROVIDER
+        original_tts = Config.TTS_PROVIDER
+        original_gender = Config.GENDER_DETECTION_METHOD
+        original_audio_model = Config.AUDIO_GENDER_MODEL
+        
         try:
+            # Apply GUI selections
+            Config.TRANSLATION_PROVIDER = translator_provider
+            Config.TTS_PROVIDER = tts_provider
+            Config.GENDER_DETECTION_METHOD = gender_method
+            Config.AUDIO_GENDER_MODEL = audio_model
+            
             success = run_pipeline(
                 input_file, 
                 output_file, 
@@ -231,6 +358,11 @@ class App(ctk.CTk):
             err_msg = f"FAILURE: {e}"
             self.after(0, lambda: self.log(err_msg))
         finally:
+            # Restore original config
+            Config.TRANSLATION_PROVIDER = original_translator
+            Config.TTS_PROVIDER = original_tts
+            Config.GENDER_DETECTION_METHOD = original_gender
+            Config.AUDIO_GENDER_MODEL = original_audio_model
             self.after(0, lambda: self.reset_buttons())
             
     def reset_buttons(self):

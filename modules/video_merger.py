@@ -76,7 +76,8 @@ def merge_video(video_path, audio_files, segments, output_path, background_audio
         combined_audio = combined_audio.overlay(audio_segment, position=start_time)
         
     # Export full audio to temp file
-    temp_audio_path = output_path.replace(".mp4", "_temp_audio.mp3")
+    base_name, _ = os.path.splitext(output_path)
+    temp_audio_path = f"{base_name}_temp_audio.mp3"
     combined_audio.export(temp_audio_path, format="mp3")
     
     # Combine with video using moviepy

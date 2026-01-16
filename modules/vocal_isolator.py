@@ -26,11 +26,13 @@ def separate_vocals(audio_path, output_dir):
         # Construct command
         # -n htdemucs: High quality hybrid transformer
         # --two-stems=vocals: Only separate into 'vocals' and 'no_vocals' (faster)
+        # --mp3: Use mp3 output to avoid torchcodec dependency on Windows
         cmd = [
             "demucs",
             "--two-stems=vocals",
             "-n", "htdemucs", 
             "-o", output_dir,
+            "--mp3",
         ]
         
         if Config.USE_GPU:
@@ -59,11 +61,11 @@ def separate_vocals(audio_path, output_dir):
                  raise RuntimeError(f"Demucs separation failed: {result.stderr}")
 
         # Determine output path
-        # Demucs structure: output_dir/htdemucs/audio_filename/no_vocals.wav
+        # Demucs structure: output_dir/htdemucs/audio_filename/no_vocals.mp3
         filename = os.path.splitext(os.path.basename(audio_path))[0]
         
         # Demucs might normalize filename? usually strictly follows input basename
-        stem_path = os.path.join(output_dir, "htdemucs", filename, "no_vocals.wav")
+        stem_path = os.path.join(output_dir, "htdemucs", filename, "no_vocals.mp3")
         
         if os.path.exists(stem_path):
             logger.info(f"Vocal separation complete. Background track: {stem_path}")

@@ -2,6 +2,8 @@ import asyncio
 import os
 import logging
 import torch
+import torchaudio
+import soundfile as sf
 import scipy.io.wavfile
 import numpy as np
 from config import Config
@@ -12,6 +14,37 @@ except ImportError:
     HAS_TRANSFORMERS = False
 
 import librosa
+
+# Monkey-patch torchaudio.load to use soundfile/librosa instead of torchcodec
+# This avoids torchcodec dependency issues on Windows with PyTorch nightly
+_original_torchaudio_load = torchaudio.load
+
+def _patched_torchaudio_load(filepath, *args, **kwargs):
+    """Patched torchaudio.load that uses soundfile instead of torchcodec."""
+    try:
+        # Try soundfile first
+        waveform, sample_rate = sf.read(filepath, dtype='float32')
+        # Convert to torch tensor and ensure correct shape (channels, samples)
+        waveform = torch.from_numpy(waveform)
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)  # Add channel dimension
+        elif waveform.dim() == 2:
+            waveform = waveform.T  # Transpose to (channels, samples)
+        return waveform, sample_rate
+    except Exception as e:
+        # Fallback to librosa
+        try:
+            waveform, sample_rate = librosa.load(filepath, sr=None, mono=False)
+            waveform = torch.from_numpy(waveform)
+            if waveform.dim() == 1:
+                waveform = waveform.unsqueeze(0)
+            return waveform, sample_rate
+        except Exception as e2:
+            # Last resort: try original torchaudio
+            return _original_torchaudio_load(filepath, *args, **kwargs)
+
+# Apply the patch
+torchaudio.load = _patched_torchaudio_load
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +87,14 @@ class VoiceGenerator:
 
     def generate(self, segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
         """
-        Generates audio using configured provider (F5-TTS or MMS).
+        Generates audio using configured provider (F5-TTS, MMS, or Edge-TTS).
         """
         provider = Config.TTS_PROVIDER
         
         if provider == "f5-tts":
             return self.generate_f5(segments, original_audio_path, output_dir, stop_event)
+        elif provider == "edge-tts":
+            return self.generate_edge_tts(segments, output_dir, male_pitch, female_pitch, stop_event)
         
         # Fallback to MMS (Existing Logic)
         generated_files = []
@@ -213,6 +248,109 @@ class VoiceGenerator:
                 # Fallback? Or just skip
                 continue
                 
+        return generated_files
+
+    def generate_edge_tts(self, segments, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
+        """
+        Generates audio using Microsoft Edge TTS (cloud-based, free).
+        Provides high-quality Thai voices without local model downloads.
+        """
+        logger.info("Initializing Edge TTS...")
+        
+        try:
+            import edge_tts
+            import asyncio
+        except ImportError:
+            logger.error("Edge TTS not installed. Please install 'edge-tts'.")
+            return []
+        
+        generated_files = []
+        
+        # Voice mapping based on gender
+        # Thai voices from Microsoft Azure
+        voices = {
+            "male": "th-TH-NiwatNeural",      # Thai male voice
+            "female": "th-TH-PremwadeeNeural" # Thai female voice (default)
+        }
+        
+        async def generate_segment_async(i, seg):
+            """Async function to generate a single segment."""
+            text = seg.get('translated_text', '')
+            gender = seg.get('gender', 'Female').lower()
+            
+            if not text:
+                return None
+            
+            text = self._clean_text(text)
+            if not text:
+                return None
+            
+            output_filename = os.path.join(output_dir, f"seg_{i:04d}.mp3")
+            if os.path.exists(output_filename):
+                return output_filename
+            
+            voice = voices.get(gender, voices["female"])
+            logger.info(f"Edge-TTS seg {i} ({gender}): {text[:30]}... using {voice}")
+            
+            try:
+                # Create TTS communicator
+                communicate = edge_tts.Communicate(text, voice)
+                
+                # Generate and save
+                await communicate.save(output_filename)
+                
+                # Convert MP3 to WAV for consistency
+                output_wav = output_filename.replace(".mp3", ".wav")
+                from pydub import AudioSegment
+                audio = AudioSegment.from_mp3(output_filename)
+                
+                # Apply pitch shift if needed
+                pitch_shift = male_pitch if gender == "male" else female_pitch
+                if pitch_shift != 0:
+                    try:
+                        # Pitch shift using pydub (changes speed too, so we adjust)
+                        # For real pitch shift without speed change, we'd need librosa
+                        # But for simplicity, we'll use frame_rate manipulation
+                        new_sample_rate = int(audio.frame_rate * (2.0 ** (pitch_shift / 12.0)))
+                        audio = audio._spawn(audio.raw_data, overrides={'frame_rate': new_sample_rate})
+                        audio = audio.set_frame_rate(44100)  # Normalize back
+                    except Exception as e:
+                        logger.warning(f"Pitch shift failed for seg {i}: {e}")
+                
+                audio.export(output_wav, format="wav")
+                
+                # Remove temp MP3
+                if os.path.exists(output_filename):
+                    os.remove(output_filename)
+                
+                return output_wav
+                
+            except Exception as e:
+                logger.error(f"Edge-TTS failed for seg {i}: {e}")
+                return None
+        
+        # Process all segments
+        async def generate_all():
+            tasks = []
+            for i, seg in enumerate(segments):
+                if stop_event and stop_event.is_set():
+                    logger.info("Edge-TTS stopped by user.")
+                    break
+                tasks.append(generate_segment_async(i, seg))
+            
+            results = await asyncio.gather(*tasks)
+            return [r for r in results if r is not None]
+        
+        # Run async loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        generated_files = loop.run_until_complete(generate_all())
+        
+        logger.info(f"Edge-TTS generated {len(generated_files)} audio files")
         return generated_files
 
 _generator = VoiceGenerator()
