@@ -4,7 +4,7 @@ A comprehensive AI-powered video dubbing tool designed for high-quality, **uncen
 
 ## 🚀 Key Features
 
-*   **Advanced TTS**: Uses **F5-TTS** (State-of-the-Art) for natural Thai speech and **Voice Cloning** to match the original speaker's tone.
+*   **Advanced TTS**: Uses **OmniVoice** (State-of-the-Art) as default for natural Thai speech and **Voice Cloning** to match original speaker's tone, with F5-TTS, Edge-TTS, and MMS as options.
 *   **Smart Translation**:
     *   **JP -> EN -> TH Bridge**: Automatically detects Japanese and translates via English for better context.
     *   **Uncensored & Natural**: Tuned for "Spoken Thai" (ภาษาพูด) and supports explicit language without filtering.
@@ -100,7 +100,8 @@ For automation or headless usage.
 
 Special thanks to these amazing open-source projects that make this tool possible:
 
-*   **[F5-TTS-THAI](https://github.com/VYNCX/F5-TTS-THAI)**: The core engine for high-quality Thai voice cloning.
+*   **[OmniVoice](https://github.com/k2-fsa/OmniVoice)**: The default core engine for high-quality Thai voice cloning and TTS.
+*   **[F5-TTS-THAI](https://github.com/VYNCX/F5-TTS-THAI)**: High-quality Thai voice cloning alternative.
 *   **[Faster Whisper](https://github.com/SYSTRAN/faster-whisper)**: For lightning-fast and accurate speech transcription.
 *   **[Ollama](https://ollama.com/)**: Enabling local LLM inference for uncensored translation.
 *   **Gemma 2 / Llama 3 Models**: Powering the contextual understanding and translation capabilities.
