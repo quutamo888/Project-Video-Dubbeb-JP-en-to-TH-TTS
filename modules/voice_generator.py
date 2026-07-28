@@ -95,6 +95,8 @@ class VoiceGenerator:
             return self.generate_f5(segments, original_audio_path, output_dir, stop_event)
         elif provider == "edge-tts":
             return self.generate_edge_tts(segments, output_dir, male_pitch, female_pitch, stop_event)
+        elif provider == "omnivoice":
+            return self.generate_omnivoice(segments, original_audio_path, output_dir, stop_event)
         
         # Fallback to MMS (Existing Logic)
         generated_files = []
@@ -161,6 +163,90 @@ class VoiceGenerator:
                 logger.error(f"Failed to generate segment {i}: {e}")
                 continue
                 
+        return generated_files
+
+    def generate_omnivoice(self, segments, original_audio_path, output_dir, stop_event=None):
+        logger.info("Initializing OmniVoice...")
+        try:
+            from omnivoice import OmniVoice
+            import soundfile as sf
+            from pydub import AudioSegment
+        except ImportError:
+            logger.error("OmniVoice not installed. Please install 'omnivoice'.")
+            return []
+
+        if not hasattr(self, 'omnivoice_model'):
+            device = "cuda:0" if torch.cuda.is_available() and Config.USE_GPU else "cpu"
+            dtype = torch.float16 if torch.cuda.is_available() and Config.USE_GPU else torch.float32
+            logger.info(f"Loading OmniVoice model onto {device} with {dtype}...")
+            self.omnivoice_model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=device, dtype=dtype)
+        
+        generated_files = []
+        
+        has_ref = original_audio_path and os.path.exists(original_audio_path)
+        if has_ref:
+            full_audio = AudioSegment.from_file(original_audio_path)
+        
+        for i, seg in enumerate(segments):
+            if stop_event and stop_event.is_set():
+                logger.info("OmniVoice stopped by user.")
+                break
+                
+            text = seg.get('translated_text', '')
+            original_text = seg.get('text', '')
+            
+            if not text:
+                continue
+            
+            text = self._clean_text(text)
+            if not text:
+                continue
+            
+            output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
+            if os.path.exists(output_filename):
+                generated_files.append(output_filename)
+                continue
+                
+            logger.info(f"OmniVoice Generating seg {i}: {text[:30]}...")
+            
+            ref_audio_path = None
+            try:
+                if has_ref:
+                    start_ms = int(seg['start'] * 1000)
+                    end_ms = int(seg['end'] * 1000)
+                    if end_ms - start_ms < 1000:
+                        end_ms = start_ms + 1000
+                    
+                    ref_audio_seg = full_audio[start_ms:end_ms]
+                    ref_audio_path = os.path.join(output_dir, f"ref_omni_{i:04d}.wav")
+                    ref_audio_seg.export(ref_audio_path, format="wav")
+                    
+                    audio_list = self.omnivoice_model.generate(
+                        text=text,
+                        ref_audio=ref_audio_path,
+                        ref_text=original_text if original_text else ".",
+                        speed=1.0,
+                        num_step=32
+                    )
+                else:
+                    audio_list = self.omnivoice_model.generate(
+                        text=text,
+                        speed=1.0,
+                        num_step=32
+                    )
+                
+                final_audio = np.asarray(audio_list[0])
+                sf.write(output_filename, final_audio, 24000)
+                generated_files.append(output_filename)
+            except Exception as e:
+                logger.error(f"OmniVoice Failed seg {i}: {e}")
+            finally:
+                if ref_audio_path and os.path.exists(ref_audio_path):
+                    try:
+                        os.remove(ref_audio_path)
+                    except Exception:
+                        pass
+                        
         return generated_files
 
     def generate_f5(self, segments, original_audio_path, output_dir, stop_event=None):

@@ -19,6 +19,7 @@ psutil
 gputil
 transformers
 edge-tts>=7.2.7
+omnivoice
 
 # PyTorch with CUDA 12.1 support
 --extra-index-url https://download.pytorch.org/whl/cu121

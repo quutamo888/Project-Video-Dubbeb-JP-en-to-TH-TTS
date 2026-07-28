@@ -32,7 +32,7 @@ class Config:
     NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")  # ~600MB, supports JP->TH
 
     # TTS Settings
-    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "f5-tts") # "f5-tts", "mms", "edge-tts"
+    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "omnivoice") # "omnivoice", "f5-tts", "mms", "edge-tts"
     EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "th-TH-PremwadeeNeural") # th-TH-PremwadeeNeural, th-TH-NiwatNeural
     
     # Gender Detection Settings

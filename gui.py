@@ -137,10 +137,10 @@ class App(ctk.CTk):
         self.lbl_tts.grid(row=4, column=0, padx=10, pady=10, sticky="w")
         self.combo_tts = ctk.CTkComboBox(
             self.frame_settings,
-            values=["f5-tts (Voice Clone, Slow)", "edge-tts (Natural, Fast)", "mms (Basic, Local)"],
+            values=["omnivoice (Voice Clone, Natural)", "f5-tts (Voice Clone, Slow)", "edge-tts (Natural, Fast)", "mms (Basic, Local)"],
             state="readonly"
         )
-        self.combo_tts.set("edge-tts (Natural, Fast)")
+        self.combo_tts.set("omnivoice (Voice Clone, Natural)")
         self.combo_tts.grid(row=4, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
         
         # Gender Detection Method
@@ -286,6 +286,7 @@ class App(ctk.CTk):
             "google (Fast, Online)": "google"
         }
         tts_map = {
+            "omnivoice (Voice Clone, Natural)": "omnivoice",
             "f5-tts (Voice Clone, Slow)": "f5-tts",
             "edge-tts (Natural, Fast)": "edge-tts",
             "mms (Basic, Local)": "mms"
