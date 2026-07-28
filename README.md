@@ -2,6 +2,15 @@
 
 A comprehensive AI-powered video dubbing tool designed for high-quality, **uncensored** Thai localization. It features voice cloning, bridge translation for Japanese content, and a modern GUI with real-time system monitoring.
 
+## 📺 Demo & UI Preview
+
+### GUI Interface
+![AI Video Dubbing Pro GUI](Review/UI.png)
+
+### Video Demo
+[![Watch the Video Demo](https://img.youtube.com/vi/xdQI-p60SMg/0.jpg)](https://youtu.be/xdQI-p60SMg)
+
+
 ## 🚀 Key Features
 
 *   **Advanced TTS**: Uses **OmniVoice** (State-of-the-Art) as default for natural Thai speech and **Voice Cloning** to match original speaker's tone, with F5-TTS, Edge-TTS, and MMS as options.
