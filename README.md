@@ -107,5 +107,3 @@ Special thanks to these amazing open-source projects that make this tool possibl
 *   **Gemma 2 / Llama 3 Models**: Powering the contextual understanding and translation capabilities.
 *   **Demucs**: For state-of-the-art music source separation.
 
----
-*Created by Antigravity*
