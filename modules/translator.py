@@ -85,8 +85,8 @@ def translate_with_nllb(text, source_lang="jpn_Jpan", target_lang="tha_Thai"):
         # Decode
         translation = _nllb_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
         
-        # Validate: Must contain Thai characters
-        if not has_thai_chars(translation):
+        # Validate: Must contain Thai characters if target is Thai
+        if target_lang == "tha_Thai" and not has_thai_chars(translation):
             logger.warning(f"NLLB Output Invalid (No Thai): '{translation}'")
             return None
             
@@ -120,12 +120,12 @@ def has_thai_chars(text):
 def translate_with_ollama(text, target_lang="th", source_lang="auto", temperature=0.3):
     """
     Translates text using a local Ollama instance with valid JSON options.
-    Supports JP -> EN -> TH bridge translation.
+    Supports Japanese/Thai/English translations.
     """
     
     current_text = text
     
-    # Bridge Translation: Japanese -> English first
+    # Bridge Translation: Japanese -> English first if target is Thai
     if source_lang == "ja" and target_lang == "th":
         try:
             # More rigid prompt for bridge
@@ -154,8 +154,21 @@ def translate_with_ollama(text, target_lang="th", source_lang="auto", temperatur
             logger.error(f"Bridge translation (JA->EN) failed: {e}")
             return None # Fail whole generic to fallback to Google
 
-    # Main Translation (EN/Auto -> TH)
-    system_prompt = f"""You are a professional video translator specialized in Thai localization (นักพากย์มืออาชีพ).
+    # System prompt based on target language
+    lang_name = "English" if target_lang == "en" else "Thai"
+    if target_lang == "en":
+        system_prompt = f"""You are a professional video translator specialized in English localization.
+Task: Translate the text into natural, spoken English.
+
+STRICT Rules:
+1. **Meaning**: Fix broken sentences. Keep the original intent.
+2. **Style**: Natural Spoken English.
+3. **Output**: Return ONLY the English translation.
+
+Text to Translate: {current_text}
+English Translation:"""
+    else:
+        system_prompt = f"""You are a professional video translator specialized in Thai localization (นักพากย์มืออาชีพ).
 Task: Translate the text into natural, spoken Thai.
 
 STRICT Rules:
@@ -180,8 +193,8 @@ Thai Translation:"""
         response.raise_for_status()
         result = response.json().get("response", "").strip()
         
-        # Validation: Must contain Thai characters
-        if not has_thai_chars(result):
+        # Validation: Must contain Thai characters if target is Thai
+        if target_lang == "th" and not has_thai_chars(result):
             logger.warning(f"Ollama Output Invalid (No Thai): '{result}'. Triggering Fallback.")
             return None
             
@@ -204,7 +217,7 @@ def translate_with_google(text, target_lang="th"):
 
 from utils import is_hallucination
 
-def translate_text(segments, target_lang="th", source_lang="auto", stop_event=None, temperature=0.3):
+def translate_text(segments, target_lang="th", source_lang="auto", stop_event=None, temperature=0.3, log_callback=None, enable_multitask=False, max_workers=4):
     """
     Translates text segments using the configured provider.
     
@@ -213,32 +226,48 @@ def translate_text(segments, target_lang="th", source_lang="auto", stop_event=No
         target_lang (str): Target language code.
         source_lang (str): Source language code (from Whisper).
         stop_event (threading.Event): Event to signal cancellation.
+        log_callback (function): Function to send log messages to UI.
+        enable_multitask (bool): Whether to translate segments in parallel.
+        max_workers (int): Number of parallel threads.
         
     Returns:
         list: Updated segments with 'translated_text'.
     """
+    import concurrent.futures
+
+    def log(msg):
+        logger.info(msg)
+        if log_callback:
+            log_callback(msg)
+
     provider = Config.TRANSLATION_PROVIDER
-    logger.info(f"Translating {len(segments)} segments using {provider} (Source: {source_lang})...")
+    mode_str = f"Multitask ({max_workers} threads)" if (enable_multitask and max_workers > 1) else "Sequential"
+    log(f"Translating {len(segments)} segments using {provider} [{mode_str}] (Source: {source_lang} -> Target: {target_lang})...")
     
-    for i, seg in enumerate(segments):
+    if source_lang == target_lang and source_lang != "auto":
+        log(f"Source language matches target language ({source_lang}). Skipping translation.")
+        for seg in segments:
+            seg['translated_text'] = seg['text']
+        return segments
+
+    def process_segment(item):
+        i, seg = item
         if stop_event and stop_event.is_set():
-            logger.info("Translation stopped by user.")
-            return segments
+            return seg
 
         original = seg['text']
+        log(f"   🌐 [Translate {i+1}/{len(segments)}] Translating: \"{original}\"")
         translation = None
         
         # 1. Try Ollama if selected
         if provider == "ollama":
             translation = translate_with_ollama(original, target_lang, source_lang, temperature)
             if not translation:
-                logger.warning(f"Ollama failed for segment {i}, falling back to Google Translate.")
-                # Fallback
+                log(f"   ⚠️ Ollama failed for segment {i+1}, falling back to Google Translate.")
                 translation = translate_with_google(original, target_lang)
         
         # 2. Try Local Transformer (NLLB) - runs locally without API
         elif provider == "local-transformer":
-            # Map language codes to NLLB format
             nllb_lang_map = {
                 "ja": "jpn_Jpan",
                 "th": "tha_Thai",
@@ -251,7 +280,7 @@ def translate_text(segments, target_lang="th", source_lang="auto", stop_event=No
             
             translation = translate_with_nllb(original, nllb_source, nllb_target)
             if not translation:
-                logger.warning(f"NLLB failed for segment {i}, falling back to Google Translate.")
+                log(f"   ⚠️ NLLB failed for segment {i+1}, falling back to Google Translate.")
                 translation = translate_with_google(original, target_lang)
         
         # 3. Try Google directly
@@ -260,20 +289,32 @@ def translate_text(segments, target_lang="th", source_lang="auto", stop_event=No
             
         # 4. OpenAI (Legacy support)
         elif provider == "openai":
-            logger.warning("OpenAI provider selected but logic replaced for free-tier. Using Google.")
+            log("   ⚠️ OpenAI provider selected but logic replaced for free-tier. Using Google.")
             translation = translate_with_google(original, target_lang)
 
         # Hallucination Check
         if translation and is_hallucination(translation):
-            logger.warning(f"Hallucination detected in segment {i}: '{translation[:50]}...'. Reverting to original.")
-            translation = original # or ""
+            log(f"   ⚠️ Hallucination detected in segment {i+1}: '{translation[:50]}...'. Reverting to original.")
+            translation = original
             
         # Final Fallback
         if not translation:
             translation = original
             
         seg['translated_text'] = translation
-        # logger.debug(f"Seg {i}: {original} -> {translation}")
+        log(f"   ✅ [Translate {i+1}/{len(segments)}] Result: \"{translation}\"")
+        return seg
+
+    items = list(enumerate(segments))
+    if enable_multitask and max_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(process_segment, items))
+    else:
+        for item in items:
+            if stop_event and stop_event.is_set():
+                log("Translation stopped by user.")
+                break
+            process_segment(item)
         
     logger.info("Translation complete.")
     

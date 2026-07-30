@@ -25,10 +25,17 @@ from modules.vocal_isolator import separate_vocals
 def run_pipeline(input_file, output_file, language="th", 
                  progress_callback=None, log_callback=None,
                  male_pitch=0.0, female_pitch=0.0, 
-                 translation_temperature=0.3, stop_event=None):
+                 translation_temperature=0.3, stop_event=None,
+                 source_lang="auto", target_lang=None, tts_lang=None,
+                 enable_multitask=False, max_workers=4, use_clone=True, clone_mode="full", reuse_speaker_voice=True):
     """
     Executes the full dubbing pipeline.
     """
+    if target_lang is None:
+        target_lang = language
+    if tts_lang is None:
+        tts_lang = target_lang
+
     def log(msg):
         print(msg)
         if log_callback:
@@ -54,7 +61,12 @@ def run_pipeline(input_file, output_file, language="th",
         log(f"🎬 Starting AI Video Dubbing Pipeline")
         log(f"📂 Input: {input_file}")
         log(f"📂 Output: {output_file}")
-        log(f"🌐 Target Language: {language}")
+        log(f"🌐 Source Audio Lang: {source_lang}")
+        log(f"🌐 Target Subtitle Lang: {target_lang}")
+        log(f"🌐 Target TTS Voice Lang: {tts_lang}")
+        log(f"🎤 Voice Clone Mode: {clone_mode.upper()} ({'Full Voice+Accent' if clone_mode=='full' else ('Timbre Only, No Accent' if clone_mode=='timbre' else 'Disabled')})")
+        log(f"👤 Consistent Speaker Voice: {'Enabled' if reuse_speaker_voice else 'Disabled (Dynamic Per-Sentence)'}")
+        log(f"⚡ Multitask: {'Enabled (' + str(max_workers) + ' tasks)' if enable_multitask else 'Disabled (Sequential)'}")
         log("="*50)
         
         # 1. Extract Audio
@@ -86,8 +98,9 @@ def run_pipeline(input_file, output_file, language="th",
         log(f"   🔄 Using Whisper model: {Config.WHISPER_MODEL_SIZE}")
         progress(0.15, "Transcribing...")
         
-        segments, source_lang = transcribe_audio(audio_path, model_size=Config.WHISPER_MODEL_SIZE)
-        log(f"   ✅ Detected Source Language: {source_lang}")
+        segments, detected_source_lang = transcribe_audio(audio_path, model_size=Config.WHISPER_MODEL_SIZE, source_lang=source_lang, log_callback=log)
+        final_source_lang = source_lang if source_lang != "auto" else detected_source_lang
+        log(f"   ✅ Source Language: {final_source_lang} (Detected: {detected_source_lang})")
         log(f"   ✅ Found {len(segments)} speech segments")
         
         check_stop()
@@ -104,17 +117,13 @@ def run_pipeline(input_file, output_file, language="th",
                 from modules.visual_gender_classifier import visual_classifier
                 use_visual = True
                 log(f"   🎥 Using visual gender detection (face analysis)")
-                # Load video for visual classifier
                 visual_classifier.load_video(input_file)
             except Exception as e:
-                # Assuming 'logger' is defined elsewhere or needs to be imported/defined
-                # For now, using 'log' as a fallback
                 log(f"WARNING: Visual classifier failed to initialize: {e}. Falling back to audio.")
                 use_visual = False
         else:
             use_visual = False
         
-        # Load audio classifier if needed
         if not use_visual or Config.GENDER_DETECTION_METHOD == "hybrid":
             if hasattr(classifier, 'load_audio'):
                 classifier.load_audio(audio_path)
@@ -126,15 +135,12 @@ def run_pipeline(input_file, output_file, language="th",
             
             gender = 'unknown'
             
-            # Try visual detection first (if configured)
             if use_visual:
                 gender = visual_classifier.detect_gender(input_file, seg['start'], seg['end'])
             
-            # Fallback to audio if visual failed or hybrid mode
             if gender == 'unknown' and Config.GENDER_DETECTION_METHOD in ["audio", "hybrid"]:
                 gender = classifier.detect_gender(audio_path, seg['start'], seg['end'])
             
-            # Default to female if still unknown
             if gender == 'unknown':
                 gender = 'female'
             
@@ -146,7 +152,6 @@ def run_pipeline(input_file, output_file, language="th",
             if i % 10 == 0:
                 progress(0.30 + (0.1 * (i/len(segments))), f"Analyzing seg {i+1}/{len(segments)}")
         
-        # Cleanup visual classifier
         if use_visual:
             visual_classifier.cleanup()
             
@@ -155,9 +160,8 @@ def run_pipeline(input_file, output_file, language="th",
         check_stop()
         # 4. Translate Text
         log("")
-        log(f"🌐 [Step 5/6] Translating Text to {language.upper()}...")
+        log(f"🌐 [Step 5/6] Translating Text to {target_lang.upper()}...")
         
-        # Show correct model name based on provider
         if Config.TRANSLATION_PROVIDER == "ollama":
             model_info = f"ollama ({Config.OLLAMA_MODEL})"
         elif Config.TRANSLATION_PROVIDER == "local-transformer":
@@ -172,10 +176,13 @@ def run_pipeline(input_file, output_file, language="th",
         
         translated_segments = translate_text(
             segments, 
-            target_lang=language, 
-            source_lang=source_lang,
+            target_lang=target_lang, 
+            source_lang=final_source_lang,
             stop_event=stop_event, 
-            temperature=translation_temperature
+            temperature=translation_temperature,
+            log_callback=log,
+            enable_multitask=enable_multitask,
+            max_workers=max_workers
         )
         log(f"   ✅ Translation complete for {len(translated_segments)} segments")
         if Config.TRANSLATION_PROVIDER == "ollama":
@@ -187,7 +194,7 @@ def run_pipeline(input_file, output_file, language="th",
         # 5. Generate Speech
         log("")
         log("🎤 [Step 6/6] Generating Dubbed Voice...")
-        log(f"   🔄 Using TTS Provider: {Config.TTS_PROVIDER}")
+        log(f"   🔄 Using TTS Provider: {Config.TTS_PROVIDER} (Lang: {tts_lang})")
         log(f"   🔄 Male pitch: {male_pitch}, Female pitch: {female_pitch}")
         progress(0.60, "Generating Voice...")
         
@@ -197,7 +204,14 @@ def run_pipeline(input_file, output_file, language="th",
             output_dir=Config.TEMP_DIR,
             male_pitch=male_pitch,
             female_pitch=female_pitch,
-            stop_event=stop_event
+            stop_event=stop_event,
+            tts_lang=tts_lang,
+            log_callback=log,
+            enable_multitask=enable_multitask,
+            max_workers=max_workers,
+            use_clone=use_clone,
+            clone_mode=clone_mode,
+            reuse_speaker_voice=reuse_speaker_voice
         )
         log(f"   ✅ Voice generation complete: {len(audio_segments)} audio clips")
         

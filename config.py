@@ -32,8 +32,11 @@ class Config:
     NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")  # ~600MB, supports JP->TH
 
     # TTS Settings
-    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "omnivoice") # "omnivoice", "f5-tts", "mms", "edge-tts"
+    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "omnivoice") # "omnivoice", "mms", "edge-tts"
     EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "th-TH-PremwadeeNeural") # th-TH-PremwadeeNeural, th-TH-NiwatNeural
+    OMNIVOICE_USE_CLONE = os.getenv("OMNIVOICE_USE_CLONE", "true").lower() == "true"
+    OMNIVOICE_CLONE_MODE = os.getenv("OMNIVOICE_CLONE_MODE", "full") # "full", "timbre", "disabled"
+    OMNIVOICE_REUSE_PROMPT = os.getenv("OMNIVOICE_REUSE_PROMPT", "true").lower() == "true" # Consistent speaker voice
     
     # Gender Detection Settings
     # "audio" - Fast, pitch analysis (current default)
@@ -45,6 +48,10 @@ class Config:
     # "pitch" - Fast, frequency-based (Hz threshold)
     # "ml" - Accurate, ML-based (wav2vec2)
     AUDIO_GENDER_MODEL = os.getenv("AUDIO_GENDER_MODEL", "ml")
+    
+    # Multitask Settings
+    ENABLE_MULTITASK = os.getenv("ENABLE_MULTITASK", "false").lower() == "true"
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
     
     @staticmethod
     def validate():

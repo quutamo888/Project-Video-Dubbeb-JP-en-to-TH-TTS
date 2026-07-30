@@ -13,7 +13,7 @@ A comprehensive AI-powered video dubbing tool designed for high-quality, **uncen
 
 ## 🚀 Key Features
 
-*   **Advanced TTS**: Uses **OmniVoice** (State-of-the-Art) as default for natural Thai speech and **Voice Cloning** to match original speaker's tone, with F5-TTS, Edge-TTS, and MMS as options.
+*   **Advanced TTS**: Uses **OmniVoice** (State-of-the-Art) as default for natural Thai speech and **Voice Cloning** to match original speaker's tone, with Edge-TTS and MMS as options.
 *   **Smart Translation**:
     *   **JP -> EN -> TH Bridge**: Automatically detects Japanese and translates via English for better context.
     *   **Uncensored & Natural**: Tuned for "Spoken Thai" (ภาษาพูด) and supports explicit language without filtering.
@@ -25,11 +25,44 @@ A comprehensive AI-powered video dubbing tool designed for high-quality, **uncen
     *   **Tone Adjustment**: Finetune pitch for Male/Female voices.
 *   **Performance**: Supports NVIDIA GPU acceleration (CUDA) for transcoding and inference.
 
+## 🆕 Recent Updates & Bug Fixes / การปรับปรุงแก้ไขล่าสุด
+
+*   **👤 Consistent Speaker Voice Profile (Reuse Voice Prompt) / ล็อคเสียงตัวละครเดิมตลอดทั้งคลิป**:
+    *   เพิ่มตัวเลือก GUI `Consistent Speaker Voice (Reuse Voice Prompt)`
+    *   ระบบจะทำการสร้าง `VoiceClonePrompt` สำหรับเสียงผู้หญิง และเสียงผู้ชาย เพียงครั้งเดียวจากท่อนเสียงที่ชัดเจนที่สุด
+    *   นำ Prompt เสียงเดิมมาใช้ซ้ำทุกประโยค ช่วยให้ตัวละครชาย/หญิง มีโทนเสียงเดียวกันตลอดทั้งวิดีโอ (100% Voice Consistency) ไม่เปลี่ยนไปมาทุกประโยค
+
+*   **🎤 OmniVoice Voice Cloning Modes (3 รูปแบบการเจนเสียง)**:
+    *   เพิ่มตัวเลือก GUI `OmniVoice Clone Mode`:
+        *   **Full Clone (Voice + Accent)**: เลียนแบบทั้งน้ำเสียงตัวละคร (Timbre) และสำนวน/จังหวะการพูดเดิม (Accent/Prosody)
+        *   **Timbre Only (Voice Only, No Accent)**: เลียนแบบเฉพาะโทนเสียงชาย/หญิง (Timbre) พูดภาษาไทยด้วยจังหวะธรรมชาติ ไร้สำนวนต่างชาติ (ทำงานเร็วขึ้น 100 เท่า ป้องกันการค้าง)
+        *   **Disabled (Standard TTS)**: ใช้เสียงสังเคราะห์มาตรฐานพร้อมระบบปรับ Pitch ชาย/หญิง
+
+*   **⚡ Multitask & Parallel Processing (ประมวลผลขนาน Step 5 & 6)**:
+    *   เพิ่มตัวเลือก GUI **Enable Multitask** และกำหนดจำนวน **Max Worker Tasks** (1-16)
+    *   แปลภาษา (`modules/translator.py`) และสร้างเสียง Edge-TTS ขนานกันผ่าน ThreadPoolExecutor & Async Semaphores
+    *   ปรับปรุงระบบ Thread-lock สำหรับ OmniVoice CUDA GPU ป้องกัน GPU ค้าง (GPU 100% Freeze Fix)
+
+*   **🌐 Flexible Language Selection Dropdowns / เลือกระบุภาษาได้อย่างยืดหยุ่น**:
+    *   **Source Audio Language**: เลือก `Auto Detect`, `Japanese (ja)`, `English (en)`, หรือ `Thai (th)`
+    *   **Output Subtitle Language**: เลือกภาษาซับไตเติลเป้าหมาย (`Thai`, `English`)
+    *   **OmniVoice / TTS Target Voice**: เลือกภาษาของเสียงพากย์ TTS (`Thai`, `English`)
+
+*   **📝 Real-time Sentence-by-Sentence Console Logs / แสดง Log ละเอียดแบบประโยคต่อประโยค**:
+    *   **Step 3/6 (Transcribe)**: แสดงเวลาและประโยคภาษาต้นทางที่ถอดได้ในขณะนั้น
+    *   **Step 5/6 (Translate)**: แสดงประโยคต้นทาง และผลลัพธ์ประโยคแปลภาษาไทย/อังกฤษแบบเรียลไทม์
+    *   **Step 6/6 (TTS Generation)**: แสดงประโยคและเพศตัวละครที่กำลังสังเคราะห์เสียงพากย์
+
+*   **🔧 Windows & PyTorch Compatibility Fixes / แก้ไข Bug ระบบบน Windows**:
+    *   แก้ไขข้อผิดพลาด `Could not load libtorchcodec` บน Windows PyTorch nightly โดยใช้ `soundfile`/`librosa` แทน
+    *   แก้ไข `NameError: OMNIVOICE_AVAILABLE`
+    *   ลบโมเดล F5-TTS ที่ไม่ได้ใช้งานออกจากระบบและคู่มือ
+
 ## 🛠️ Prerequisites
 
 *   **Python 3.10+**
 *   **FFmpeg**: Must be installed and added to system PATH.
-*   **NVIDIA GPU** (Recommended): For fast rendering and F5-TTS/Whisper inference.
+*   **NVIDIA GPU** (Recommended): For fast rendering and Whisper/OmniVoice inference.
 *   **Ollama**: (Optional but Recommended) For high-quality local translation.
     *   Install Ollama and pull a model (e.g., `ollama pull llama3` or `openthaigpt`).
     *   Configure URL/Model in `config.py` if needed.
@@ -99,7 +132,7 @@ For automation or headless usage.
 *   `modules/`:
     *   `transcriber.py`: Whisper STT logic.
     *   `translator.py`: Ollama/Google translation logic with Bridge support.
-    *   `voice_generator.py`: F5-TTS and voice cloning logic.
+    *   `voice_generator.py`: OmniVoice, Edge-TTS, and MMS voice synthesis logic.
     *   `vocal_isolator.py`: Demucs background separation.
     *   `video_merger.py`: MoviePy/FFmpeg video assembly.
 *   `temp/`: Temporary processing artifacts (Auto-cleaned after success).
@@ -110,7 +143,6 @@ For automation or headless usage.
 Special thanks to these amazing open-source projects that make this tool possible:
 
 *   **[OmniVoice](https://github.com/k2-fsa/OmniVoice)**: The default core engine for high-quality Thai voice cloning and TTS.
-*   **[F5-TTS-THAI](https://github.com/VYNCX/F5-TTS-THAI)**: High-quality Thai voice cloning alternative.
 *   **[Faster Whisper](https://github.com/SYSTRAN/faster-whisper)**: For lightning-fast and accurate speech transcription.
 *   **[Ollama](https://ollama.com/)**: Enabling local LLM inference for uncensored translation.
 *   **Gemma 2 / Llama 3 Models**: Powering the contextual understanding and translation capabilities.

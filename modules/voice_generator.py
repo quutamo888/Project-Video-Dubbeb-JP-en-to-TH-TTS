@@ -15,16 +15,19 @@ except ImportError:
 
 import librosa
 
+try:
+    from omnivoice import OmniVoice
+    OMNIVOICE_AVAILABLE = True
+except ImportError:
+    OMNIVOICE_AVAILABLE = False
+
 # Monkey-patch torchaudio.load to use soundfile/librosa instead of torchcodec
 # This avoids torchcodec dependency issues on Windows with PyTorch nightly
-_original_torchaudio_load = torchaudio.load
-
 def _patched_torchaudio_load(filepath, *args, **kwargs):
-    """Patched torchaudio.load that uses soundfile instead of torchcodec."""
+    """Patched torchaudio.load that uses soundfile/librosa instead of torchcodec."""
     try:
         # Try soundfile first
         waveform, sample_rate = sf.read(filepath, dtype='float32')
-        # Convert to torch tensor and ensure correct shape (channels, samples)
         waveform = torch.from_numpy(waveform)
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)  # Add channel dimension
@@ -40,8 +43,7 @@ def _patched_torchaudio_load(filepath, *args, **kwargs):
                 waveform = waveform.unsqueeze(0)
             return waveform, sample_rate
         except Exception as e2:
-            # Last resort: try original torchaudio
-            return _original_torchaudio_load(filepath, *args, **kwargs)
+            raise RuntimeError(f"Failed to load audio file '{filepath}': sf_err={e}, librosa_err={e2}")
 
 # Apply the patch
 torchaudio.load = _patched_torchaudio_load
@@ -79,60 +81,69 @@ class VoiceGenerator:
 
         return self.models.get(model_id), self.tokenizers.get(model_id)
 
-    def _clean_text(self, text):
+    def _clean_text(self, text, tts_lang="th"):
         import re
-        # Remove polite particles
-        text = re.sub(r'(ครับ|ค่ะ|คะ|นะครับ|นะค่ะ|จ๊ะ|จ้ะ|นะคะ)', '', text)
+        if tts_lang == "th":
+            # Remove polite particles for Thai
+            text = re.sub(r'(ครับ|ค่ะ|คะ|นะครับ|นะค่ะ|จ๊ะ|จ้ะ|นะคะ)', '', text)
         return text.strip()
 
-    def generate(self, segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
+    def generate(self, segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None, tts_lang="th", log_callback=None, enable_multitask=False, max_workers=4, use_clone=True, clone_mode="full", reuse_speaker_voice=True):
         """
-        Generates audio using configured provider (F5-TTS, MMS, or Edge-TTS).
+        Generates audio using configured provider (OmniVoice, MMS, or Edge-TTS).
         """
         provider = Config.TTS_PROVIDER
         
-        if provider == "f5-tts":
-            return self.generate_f5(segments, original_audio_path, output_dir, stop_event)
-        elif provider == "edge-tts":
-            return self.generate_edge_tts(segments, output_dir, male_pitch, female_pitch, stop_event)
+        if provider == "edge-tts":
+            return self.generate_edge_tts(segments, output_dir, male_pitch, female_pitch, stop_event=stop_event, tts_lang=tts_lang, log_callback=log_callback, enable_multitask=enable_multitask, max_workers=max_workers)
         elif provider == "omnivoice":
-            return self.generate_omnivoice(segments, original_audio_path, output_dir, stop_event)
+            return self.generate_omnivoice(segments, original_audio_path, output_dir, male_pitch=male_pitch, female_pitch=female_pitch, stop_event=stop_event, tts_lang=tts_lang, log_callback=log_callback, enable_multitask=enable_multitask, max_workers=max_workers, use_clone=use_clone, clone_mode=clone_mode, reuse_speaker_voice=reuse_speaker_voice)
         
         # Fallback to MMS (Existing Logic)
+        import concurrent.futures
+
+        def log(msg):
+            logger.info(msg)
+            if log_callback: log_callback(msg)
+
         generated_files = []
-        for i, seg in enumerate(segments):
+
+        def process_mms_segment(item):
+            i, seg = item
             if stop_event and stop_event.is_set():
-                logger.info("Voice generation stopped by user.")
-                break
+                return None
 
             text = seg.get('translated_text', '')
             gender = seg.get('gender', 'unknown')
             
             if not text:
-                continue
+                return None
             
-            # Clean polite particles
-            text = self._clean_text(text)
-            if not text: continue
+            text = self._clean_text(text, tts_lang=tts_lang)
+            if not text:
+                return None
                 
             output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
             if os.path.exists(output_filename):
-                generated_files.append(output_filename)
-                continue
+                return output_filename
                 
-            logger.info(f"Generating segment {i} ({gender}): {text[:30]}...")
+            log(f"   🎤 [MMS {i+1}/{len(segments)}] Generating audio ({gender}, {tts_lang}): \"{text[:30]}\"")
             
             try:
-                model, tokenizer = self.get_model_and_tokenizer(gender)
-                if model is None: raise RuntimeError(f"Model for {gender} not loaded")
+                if not hasattr(self, 'omni_lock'):
+                    import threading
+                    self.omni_lock = threading.Lock()
 
-                inputs = tokenizer(text, return_tensors="pt").to(self.device)
-                with torch.no_grad():
-                    output = model(**inputs).waveform
+                with self.omni_lock:
+                    model, tokenizer = self.get_model_and_tokenizer(gender)
+                    if model is None: raise RuntimeError(f"Model for {gender} not loaded")
+
+                    inputs = tokenizer(text, return_tensors="pt").to(self.device)
+                    with torch.no_grad():
+                        output = model(**inputs).waveform
                 
                 audio_np = output.cpu().numpy().squeeze()
                 
-                # Pitch Shift
                 pitch_shift = male_pitch if gender == 'male' else female_pitch
                 if pitch_shift != 0:
                      sr = model.config.sampling_rate if hasattr(model, 'config') else self.sample_rate
@@ -141,14 +152,12 @@ class VoiceGenerator:
                      except Exception as e:
                          pass
 
-                # Save
                 if len(audio_np) > 0:
                     sr = model.config.sampling_rate if hasattr(model, 'config') else self.sample_rate
-                    # Check Hallucination
                     target_duration = seg.get('end', 0) - seg.get('start', 0)
                     gen_duration = len(audio_np) / sr
                     if target_duration > 0 and gen_duration > target_duration * 4 and (gen_duration - target_duration) > 2.0:
-                         logger.warning(f"MMS Hallucination detected seg {i}. Silencing.")
+                         log(f"   ⚠️ MMS Hallucination detected seg {i+1}. Silencing.")
                          audio_int16 = np.zeros(int(target_duration * sr), dtype=np.int16)
                     else:
                         max_val = np.max(np.abs(audio_np))
@@ -158,276 +167,277 @@ class VoiceGenerator:
                             audio_int16 = (audio_np / max_val * 32767).astype(np.int16)
                             
                     scipy.io.wavfile.write(output_filename, sr, audio_int16)
-                    generated_files.append(output_filename)
+                    return output_filename
             except Exception as e:
-                logger.error(f"Failed to generate segment {i}: {e}")
-                continue
+                log(f"   ❌ MMS Failed seg {i+1}: {e}")
+                return None
+
+        items = list(enumerate(segments))
+        generated_files = []
+        for item in items:
+            if stop_event and stop_event.is_set():
+                log("MMS stopped by user.")
+                break
+            r = process_mms_segment(item)
+            if r: generated_files.append(r)
                 
         return generated_files
 
-    def generate_omnivoice(self, segments, original_audio_path, output_dir, stop_event=None):
-        logger.info("Initializing OmniVoice...")
-        try:
-            from omnivoice import OmniVoice
-            import soundfile as sf
-            from pydub import AudioSegment
-        except ImportError:
-            logger.error("OmniVoice not installed. Please install 'omnivoice'.")
+    def generate_omnivoice(self, segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None, tts_lang="th", log_callback=None, enable_multitask=False, max_workers=4, use_clone=True, clone_mode="full", reuse_speaker_voice=True):
+        import concurrent.futures
+        
+        def log(msg):
+            logger.info(msg)
+            if log_callback: log_callback(msg)
+
+        mode_str = f"Multitask ({max_workers} threads)" if (enable_multitask and max_workers > 1) else "Sequential"
+        clone_str = f"Full Clone (Voice + Accent)" if clone_mode == "full" else ("Timbre Only (Voice Timbre, No Accent)" if clone_mode == "timbre" else "Disabled")
+        reuse_str = ", Consistent Speaker Profile" if (reuse_speaker_voice and clone_mode == "full") else ""
+        log(f"Initializing OmniVoice [{mode_str}, {clone_str}{reuse_str}]...")
+
+        if not OMNIVOICE_AVAILABLE:
+            log("❌ OmniVoice not installed. Please install 'omnivoice'.")
             return []
 
         if not hasattr(self, 'omnivoice_model'):
             device = "cuda:0" if torch.cuda.is_available() and Config.USE_GPU else "cpu"
             dtype = torch.float16 if torch.cuda.is_available() and Config.USE_GPU else torch.float32
-            logger.info(f"Loading OmniVoice model onto {device} with {dtype}...")
+            log(f"Loading OmniVoice model onto {device} with {dtype}...")
             self.omnivoice_model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=device, dtype=dtype)
         
-        generated_files = []
-        
-        has_ref = original_audio_path and os.path.exists(original_audio_path)
-        if has_ref:
-            full_audio = AudioSegment.from_file(original_audio_path)
-        
-        for i, seg in enumerate(segments):
+        from pydub import AudioSegment
+        is_clone_active = use_clone and clone_mode != "disabled"
+        has_ref = is_clone_active and original_audio_path and os.path.exists(original_audio_path)
+        full_audio = AudioSegment.from_file(original_audio_path) if has_ref else None
+
+        if not hasattr(self, 'omni_lock'):
+            import threading
+            self.omni_lock = threading.Lock()
+
+        # Pre-build reusable VoiceClonePrompts per gender if consistent speaker voice is enabled
+        speaker_prompts = {}
+        if is_clone_active and clone_mode == "full" and has_ref and reuse_speaker_voice:
+            log("   👤 Building Consistent Speaker Voice Prompts per gender...")
+            for g in ['female', 'male']:
+                g_segs = [s for s in segments if s.get('gender', 'female').lower() == g and s.get('text')]
+                if g_segs:
+                    best_seg = max(g_segs, key=lambda s: (3 <= (s.get('end', 0) - s.get('start', 0)) <= 10, s.get('end', 0) - s.get('start', 0)))
+                    s_ms = int(best_seg['start'] * 1000)
+                    e_ms = int(best_seg['end'] * 1000)
+                    if e_ms - s_ms < 1000:
+                        e_ms = s_ms + 1000
+                    
+                    ref_audio_seg = full_audio[s_ms:e_ms]
+                    ref_path = os.path.join(output_dir, f"ref_speaker_{g}.wav")
+                    ref_audio_seg.export(ref_path, format="wav")
+                    
+                    try:
+                        ref_txt = best_seg.get('text', '.')
+                        with self.omni_lock:
+                            prompt = self.omnivoice_model.create_voice_clone_prompt(
+                                ref_audio=ref_path,
+                                ref_text=ref_txt if ref_txt else ".",
+                                preprocess_prompt=True
+                            )
+                        speaker_prompts[g] = prompt
+                        log(f"      ✅ Built consistent {g.capitalize()} speaker voice profile")
+                    except Exception as pe:
+                        log(f"      ⚠️ Could not build prompt for {g}: {pe}")
+                    finally:
+                        if os.path.exists(ref_path):
+                            try: os.remove(ref_path)
+                            except Exception: pass
+
+        def process_omni_segment(item):
+            i, seg = item
             if stop_event and stop_event.is_set():
-                logger.info("OmniVoice stopped by user.")
-                break
+                return None
                 
             text = seg.get('translated_text', '')
             original_text = seg.get('text', '')
+            gender = seg.get('gender', 'female').lower()
             
             if not text:
-                continue
+                return None
             
-            text = self._clean_text(text)
+            text = self._clean_text(text, tts_lang=tts_lang)
             if not text:
-                continue
+                return None
             
             output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
             if os.path.exists(output_filename):
-                generated_files.append(output_filename)
-                continue
+                return output_filename
                 
-            logger.info(f"OmniVoice Generating seg {i}: {text[:30]}...")
+            log(f"   🎤 [OmniVoice {i+1}/{len(segments)}] Generating audio ({gender}, {tts_lang}): \"{text}\"")
             
             ref_audio_path = None
             try:
-                if has_ref:
-                    start_ms = int(seg['start'] * 1000)
-                    end_ms = int(seg['end'] * 1000)
-                    if end_ms - start_ms < 1000:
-                        end_ms = start_ms + 1000
-                    
-                    ref_audio_seg = full_audio[start_ms:end_ms]
-                    ref_audio_path = os.path.join(output_dir, f"ref_omni_{i:04d}.wav")
-                    ref_audio_seg.export(ref_audio_path, format="wav")
-                    
-                    audio_list = self.omnivoice_model.generate(
-                        text=text,
-                        ref_audio=ref_audio_path,
-                        ref_text=original_text if original_text else ".",
-                        speed=1.0,
-                        num_step=32
-                    )
+                if clone_mode == "timbre":
+                    with self.omni_lock:
+                        audio_list = self.omnivoice_model.generate(
+                            text=text,
+                            instruct="female" if gender == "female" else "male",
+                            speed=1.0,
+                            num_step=32
+                        )
+                elif has_ref and full_audio:
+                    if reuse_speaker_voice and gender in speaker_prompts:
+                        with self.omni_lock:
+                            audio_list = self.omnivoice_model.generate(
+                                text=text,
+                                voice_clone_prompt=speaker_prompts[gender],
+                                speed=1.0,
+                                num_step=32
+                            )
+                    else:
+                        start_ms = int(seg['start'] * 1000)
+                        end_ms = int(seg['end'] * 1000)
+                        if end_ms - start_ms < 1000:
+                            end_ms = start_ms + 1000
+                        
+                        ref_audio_seg = full_audio[start_ms:end_ms]
+                        ref_audio_path = os.path.join(output_dir, f"ref_omni_{i:04d}.wav")
+                        ref_audio_seg.export(ref_audio_path, format="wav")
+                        
+                        with self.omni_lock:
+                            audio_list = self.omnivoice_model.generate(
+                                text=text,
+                                ref_audio=ref_audio_path,
+                                ref_text=original_text if original_text else ".",
+                                speed=1.0,
+                                num_step=32
+                            )
                 else:
-                    audio_list = self.omnivoice_model.generate(
-                        text=text,
-                        speed=1.0,
-                        num_step=32
-                    )
+                    with self.omni_lock:
+                        audio_list = self.omnivoice_model.generate(
+                            text=text,
+                            instruct="female" if gender == "female" else "male",
+                            speed=1.0,
+                            num_step=32
+                        )
                 
                 final_audio = np.asarray(audio_list[0])
+
+                # Differentiate Male and Female voices when standard TTS (or pitch adjustment requested)
+                pitch_shift = male_pitch if gender == 'male' else female_pitch
+                if not use_clone and gender == 'male' and pitch_shift == 0:
+                    pitch_shift = -3.5  # Pitch down for male voice differentiation
+
+                if pitch_shift != 0:
+                    try:
+                        final_audio = librosa.effects.pitch_shift(final_audio, sr=24000, n_steps=pitch_shift)
+                    except Exception as pe:
+                        log(f"   ⚠️ Pitch shift failed for seg {i+1}: {pe}")
+
                 sf.write(output_filename, final_audio, 24000)
-                generated_files.append(output_filename)
+                return output_filename
             except Exception as e:
-                logger.error(f"OmniVoice Failed seg {i}: {e}")
+                log(f"   ❌ OmniVoice Failed seg {i+1}: {e}")
+                return None
             finally:
                 if ref_audio_path and os.path.exists(ref_audio_path):
                     try:
                         os.remove(ref_audio_path)
                     except Exception:
                         pass
-                        
-        return generated_files
 
-    def generate_f5(self, segments, original_audio_path, output_dir, stop_event=None):
-        logger.info("Initializing F5-TTS...")
-        try:
-            from f5_tts_th.tts import TTS
-            import soundfile as sf
-            from pydub import AudioSegment
-        except ImportError:
-            logger.error("F5-TTS not installed. Please install 'f5-tts-th' and 'soundfile'.")
-            return []
-
-        # Load F5 Model (v1 recommended in docs)
-        if not hasattr(self, 'f5_model'):
-            self.f5_model = TTS(model="v1")
-        
+        items = list(enumerate(segments))
         generated_files = []
-        
-        # Load full audio for slicing
-        full_audio = AudioSegment.from_file(original_audio_path)
-        
-        for i, seg in enumerate(segments):
+        for item in items:
             if stop_event and stop_event.is_set():
-                logger.info("F5-TTS stopped by user.")
+                log("OmniVoice stopped by user.")
                 break
-                
-            text = seg.get('translated_text', '')
-            original_text = seg.get('text', '') # Original transcript
-            
-            if not text: continue
-            
-            text = self._clean_text(text)
-            if not text: continue
-            
-            output_filename = os.path.join(output_dir, f"seg_{i:04d}.wav")
-            if os.path.exists(output_filename):
-                generated_files.append(output_filename)
-                continue
-            
-            # Extract Reference Audio
-            start_ms = int(seg['start'] * 1000)
-            end_ms = int(seg['end'] * 1000)
-            
-            # Ensure at least 1-2 sec for reference? F5 might need decent length.
-            # If segment is too short, extend slightly (careful of noise)
-            if end_ms - start_ms < 500:
-                end_ms = start_ms + 1000
-                
-            ref_audio_seg = full_audio[start_ms:end_ms]
-            ref_audio_path = os.path.join(output_dir, f"ref_{i:04d}.wav")
-            ref_audio_seg.export(ref_audio_path, format="wav")
-            
-            logger.info(f"F5-TTS Generating seg {i}: {text[:30]}...")
-            
-            try:
-                # Infer
-                # Note: ref_text is the text of the REFERENCE audio.
-                # If we use original audio, we should use original text.
-                # But F5-TTS-THAI might only support Thai text. 
-                # Let's try passing "." if original text causes issues, but ideally we pass original text.
-                # If the library crashes on non-Thai ref_text, we might need a fixed Thai reference.
-                # For now, let's assume it can handle foreign characters or ignore them?
-                # Actually, providing incorrect ref_text usually degrades quality (prosody mismatch).
-                # Strategy: Pass original text. If it fails, fallback strategy needed (maybe fixed ref).
-                
-                wav = self.f5_model.infer(
-                    ref_audio=ref_audio_path,
-                    ref_text=original_text if original_text else ".",
-                    gen_text=text,
-                    step=32,
-                    cfg=2.0,
-                    speed=1.0
-                )
-                
-                # Write output
-                sf.write(output_filename, wav, 24000)
-                generated_files.append(output_filename)
-                
-                # Cleanup ref
-                if os.path.exists(ref_audio_path):
-                    os.remove(ref_audio_path)
-                    
-            except Exception as e:
-                logger.error(f"F5-TTS Failed seg {i}: {e}")
-                # Fallback? Or just skip
-                continue
-                
+            r = process_omni_segment(item)
+            if r:
+                generated_files.append(r)
         return generated_files
 
-    def generate_edge_tts(self, segments, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
-        """
-        Generates audio using Microsoft Edge TTS (cloud-based, free).
-        Provides high-quality Thai voices without local model downloads.
-        """
-        logger.info("Initializing Edge TTS...")
+    def generate_edge_tts(self, segments, output_dir, male_pitch=0, female_pitch=0, stop_event=None, tts_lang="th", log_callback=None, enable_multitask=False, max_workers=4):
+        def log(msg):
+            logger.info(msg)
+            if log_callback: log_callback(msg)
+
+        mode_str = f"Multitask ({max_workers} tasks)" if (enable_multitask and max_workers > 1) else "Sequential"
+        log(f"Initializing Edge TTS [{mode_str}]...")
         
         try:
             import edge_tts
             import asyncio
         except ImportError:
-            logger.error("Edge TTS not installed. Please install 'edge-tts'.")
+            log("❌ Edge TTS not installed. Please install 'edge-tts'.")
             return []
         
-        generated_files = []
+        if tts_lang == "en":
+            voices = {
+                "male": "en-US-AndrewNeural",
+                "female": "en-US-AvaNeural"
+            }
+        else:
+            voices = {
+                "male": "th-TH-NiwatNeural",
+                "female": "th-TH-PremwadeeNeural"
+            }
         
-        # Voice mapping based on gender
-        # Thai voices from Microsoft Azure
-        voices = {
-            "male": "th-TH-NiwatNeural",      # Thai male voice
-            "female": "th-TH-PremwadeeNeural" # Thai female voice (default)
-        }
-        
+        semaphore = asyncio.Semaphore(max_workers if (enable_multitask and max_workers > 0) else 4)
+
         async def generate_segment_async(i, seg):
-            """Async function to generate a single segment."""
-            text = seg.get('translated_text', '')
-            gender = seg.get('gender', 'Female').lower()
-            
-            if not text:
-                return None
-            
-            text = self._clean_text(text)
-            if not text:
-                return None
-            
-            output_filename = os.path.join(output_dir, f"seg_{i:04d}.mp3")
-            if os.path.exists(output_filename):
-                return output_filename
-            
-            voice = voices.get(gender, voices["female"])
-            logger.info(f"Edge-TTS seg {i} ({gender}): {text[:30]}... using {voice}")
-            
-            try:
-                # Create TTS communicator
-                communicate = edge_tts.Communicate(text, voice)
+            async with semaphore:
+                text = seg.get('translated_text', '')
+                gender = seg.get('gender', 'Female').lower()
                 
-                # Generate and save
-                await communicate.save(output_filename)
+                if not text:
+                    return None
                 
-                # Convert MP3 to WAV for consistency
-                output_wav = output_filename.replace(".mp3", ".wav")
-                from pydub import AudioSegment
-                audio = AudioSegment.from_mp3(output_filename)
+                text = self._clean_text(text, tts_lang=tts_lang)
+                if not text:
+                    return None
                 
-                # Apply pitch shift if needed
-                pitch_shift = male_pitch if gender == "male" else female_pitch
-                if pitch_shift != 0:
-                    try:
-                        # Pitch shift using pydub (changes speed too, so we adjust)
-                        # For real pitch shift without speed change, we'd need librosa
-                        # But for simplicity, we'll use frame_rate manipulation
-                        new_sample_rate = int(audio.frame_rate * (2.0 ** (pitch_shift / 12.0)))
-                        audio = audio._spawn(audio.raw_data, overrides={'frame_rate': new_sample_rate})
-                        audio = audio.set_frame_rate(44100)  # Normalize back
-                    except Exception as e:
-                        logger.warning(f"Pitch shift failed for seg {i}: {e}")
-                
-                audio.export(output_wav, format="wav")
-                
-                # Remove temp MP3
+                output_filename = os.path.join(output_dir, f"seg_{i:04d}.mp3")
                 if os.path.exists(output_filename):
-                    os.remove(output_filename)
+                    return output_filename
                 
-                return output_wav
+                voice = voices.get(gender, voices["female"])
+                log(f"   🎤 [Edge-TTS {i+1}/{len(segments)}] Generating audio ({gender}, {tts_lang}): \"{text}\" ({voice})")
                 
-            except Exception as e:
-                logger.error(f"Edge-TTS failed for seg {i}: {e}")
-                return None
+                try:
+                    communicate = edge_tts.Communicate(text, voice)
+                    await communicate.save(output_filename)
+                    
+                    output_wav = output_filename.replace(".mp3", ".wav")
+                    from pydub import AudioSegment
+                    audio = AudioSegment.from_mp3(output_filename)
+                    
+                    pitch_shift = male_pitch if gender == "male" else female_pitch
+                    if pitch_shift != 0:
+                        try:
+                            new_sample_rate = int(audio.frame_rate * (2.0 ** (pitch_shift / 12.0)))
+                            audio = audio._spawn(audio.raw_data, overrides={'frame_rate': new_sample_rate})
+                            audio = audio.set_frame_rate(44100)
+                        except Exception as e:
+                            log(f"   ⚠️ Pitch shift failed for seg {i+1}: {e}")
+                    
+                    audio.export(output_wav, format="wav")
+                    
+                    if os.path.exists(output_filename):
+                        os.remove(output_filename)
+                    
+                    return output_wav
+                    
+                except Exception as e:
+                    log(f"   ❌ Edge-TTS failed for seg {i+1}: {e}")
+                    return None
         
-        # Process all segments
         async def generate_all():
             tasks = []
             for i, seg in enumerate(segments):
                 if stop_event and stop_event.is_set():
-                    logger.info("Edge-TTS stopped by user.")
+                    log("Edge-TTS stopped by user.")
                     break
                 tasks.append(generate_segment_async(i, seg))
             
             results = await asyncio.gather(*tasks)
             return [r for r in results if r is not None]
         
-        # Run async loop
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -436,10 +446,10 @@ class VoiceGenerator:
         
         generated_files = loop.run_until_complete(generate_all())
         
-        logger.info(f"Edge-TTS generated {len(generated_files)} audio files")
+        log(f"Edge-TTS generated {len(generated_files)} audio files")
         return generated_files
 
 _generator = VoiceGenerator()
 
-def generate_voice(segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None):
-    return _generator.generate(segments, original_audio_path, output_dir, male_pitch, female_pitch, stop_event)
+def generate_voice(segments, original_audio_path, output_dir, male_pitch=0, female_pitch=0, stop_event=None, tts_lang="th", log_callback=None, enable_multitask=False, max_workers=4, use_clone=True, clone_mode="full", reuse_speaker_voice=True):
+    return _generator.generate(segments, original_audio_path, output_dir, male_pitch, female_pitch, stop_event, tts_lang=tts_lang, log_callback=log_callback, enable_multitask=enable_multitask, max_workers=max_workers, use_clone=use_clone, clone_mode=clone_mode, reuse_speaker_voice=reuse_speaker_voice)
