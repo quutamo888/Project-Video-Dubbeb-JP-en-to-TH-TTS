@@ -34,11 +34,19 @@ venv.bak/
 # Project Specific
 temp/
 output/
+input/
+logs/*.log
 *.mp4
 *.mkv
 *.wav
 *.mp3
+*.srt
 dubbing.log
+
+# Agent & Skills
+.claude/
+.agents/
+skills-lock.json
 
 # IDE
 .vscode/

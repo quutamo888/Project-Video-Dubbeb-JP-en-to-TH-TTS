@@ -3,7 +3,7 @@ name = "project-video-dubbeb"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10, <3.13"
 dependencies = [
     "deep-translator>=1.11.4",
     "faster-whisper>=1.2.1",
@@ -36,7 +36,13 @@ dependencies = [
     "mediapipe",
     "tf-keras",
     "omnivoice",
+    "funasr",
+    "modelscope",
+    "yt-dlp>=2024.0.0",
 ]
+
+[tool.uv]
+environments = ["sys_platform == 'win32' and platform_machine == 'x86_64'"]
 
 [[tool.uv.index]]
 name = "pytorch-nightly"

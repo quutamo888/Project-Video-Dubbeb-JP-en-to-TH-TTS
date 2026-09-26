@@ -158,10 +158,25 @@ class GenderClassifier:
                 gender = self.detect_gender_pitch(y_seg)
             
             return gender
-                
+
         except Exception as e:
             logger.error(f"Error detecting gender: {e}")
             return 'unknown'
+
+    def unload(self):
+        """Unloads ML model to free VRAM for downstream translation and TTS."""
+        if self.ml_model is not None:
+            del self.ml_model
+            del self.ml_processor
+            self.ml_model = None
+            self.ml_processor = None
+            self.ml_initialized = False
+        self.y = None
+        self.current_audio_path = None
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logger.info("✅ ML gender model unloaded from VRAM")
 
 # Singleton
 classifier = GenderClassifier()

@@ -1,14 +1,14 @@
 import os
 from dotenv import load_dotenv
 import torch
-import torch
 
 load_dotenv()
 
 class Config:
-    # API Keys
+    # API Keys & Auth Tokens
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+    HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
     
     # Device Settings
     USE_GPU = os.getenv("USE_GPU", "true").lower() == "true"
@@ -17,25 +17,29 @@ class Config:
     
     # Paths
     OUTPUT_DIR = "output"
+    LOGS_DIR = "logs"
     
-    # Models
+    # STT Settings
+    # "kotoba-whisper" (Japanese SOTA, Ultra Accurate) or "faster-whisper" (Universal)
+    STT_ENGINE = os.getenv("STT_ENGINE", "kotoba-whisper")
+    KOTOBA_MODEL = os.getenv("KOTOBA_MODEL", "kotoba-tech/kotoba-whisper-v2.2-faster")
     WHISPER_MODEL_SIZE = "large-v2" # or "medium", "small"
-    DEVICE = "cuda" if os.getenv("USE_GPU", "true").lower() == "true" else "cpu"
 
     # Translation Settings
-    # "ollama", "openai", "google", "local-transformer" (NLLB - runs locally)
-    TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "ollama") 
+    # "local-ctranslate2" (Fastest GPU, offline), "local-qwen" (Context-Aware LLM, offline), "local-transformer", "google"
+    TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "local-ctranslate2")
+    CT2_NLLB_MODEL = os.getenv("CT2_NLLB_MODEL", "JustFrederik/nllb-200-distilled-600M-ct2-float16")
+    NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")
+    QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen/Qwen2.5-3B-Instruct")
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b") # or mistral, gemma
-    
-    # Local Transformer Translation (NLLB)
-    NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")  # ~600MB, supports JP->TH
 
     # TTS Settings
     TTS_PROVIDER = os.getenv("TTS_PROVIDER", "omnivoice") # "omnivoice", "mms", "edge-tts"
+    OMNIVOICE_MODEL = os.getenv("OMNIVOICE_MODEL", "k2-fsa/OmniVoice")
     EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "th-TH-PremwadeeNeural") # th-TH-PremwadeeNeural, th-TH-NiwatNeural
     OMNIVOICE_USE_CLONE = os.getenv("OMNIVOICE_USE_CLONE", "true").lower() == "true"
-    OMNIVOICE_CLONE_MODE = os.getenv("OMNIVOICE_CLONE_MODE", "full") # "full", "timbre", "disabled"
+    OMNIVOICE_CLONE_MODE = os.getenv("OMNIVOICE_CLONE_MODE", "timbre") # "timbre" (Authentic Thai accent), "full", "disabled"
     OMNIVOICE_REUSE_PROMPT = os.getenv("OMNIVOICE_REUSE_PROMPT", "true").lower() == "true" # Consistent speaker voice
     
     # Gender Detection Settings
@@ -48,7 +52,12 @@ class Config:
     # "pitch" - Fast, frequency-based (Hz threshold)
     # "ml" - Accurate, ML-based (wav2vec2)
     AUDIO_GENDER_MODEL = os.getenv("AUDIO_GENDER_MODEL", "ml")
-    
+
+    # Output Video Audio Settings
+    # true: Preserve original soundtrack (Track 1) and add Thai dubbed (Track 2)
+    # false: Replace audio with Thai dubbed only
+    DUAL_AUDIO_TRACKS = os.getenv("DUAL_AUDIO_TRACKS", "true").lower() == "true"
+
     # Multitask Settings
     ENABLE_MULTITASK = os.getenv("ENABLE_MULTITASK", "false").lower() == "true"
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
