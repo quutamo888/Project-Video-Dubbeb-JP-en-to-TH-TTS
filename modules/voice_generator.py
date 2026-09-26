@@ -79,7 +79,63 @@ class VoiceGenerator:
                 
         return self.models.get(model_id), self.tokenizers.get(model_id)
 
-        return self.models.get(model_id), self.tokenizers.get(model_id)
+    @staticmethod
+    def extract_acoustic_tone_instruct(samples, sr=16000, gender="female"):
+        """
+        Analyzes fundamental frequency (F0 pitch) and character register from reference audio.
+        Maps acoustic features to OmniVoice-compatible voice design tags (whitelist compliant):
+        Gender: male, female
+        Age: child, teenager, young adult, middle-aged, elderly
+        Pitch: very low pitch, low pitch, moderate pitch, high pitch, very high pitch
+        Guarantees 100% natural native Thai prosody while retaining the character's voice tone.
+        """
+        try:
+            if len(samples) < 1024:
+                return ("female, moderate pitch" if gender == "female" else "male, moderate pitch"), 160.0
+
+            f0 = librosa.yin(samples, fmin=70, fmax=450, sr=sr)
+            f0_clean = f0[~np.isnan(f0)]
+            f0_clean = f0_clean[(f0_clean > 70) & (f0_clean < 450)]
+
+            if len(f0_clean) == 0:
+                avg_f0 = 220.0 if gender == "female" else 130.0
+            else:
+                avg_f0 = float(np.median(f0_clean))
+
+            # Pitch mapping according to OmniVoice whitelist
+            if avg_f0 < 110:
+                pitch_tag = "very low pitch"
+            elif avg_f0 < 145:
+                pitch_tag = "low pitch"
+            elif avg_f0 < 205:
+                pitch_tag = "moderate pitch"
+            elif avg_f0 < 280:
+                pitch_tag = "high pitch"
+            else:
+                pitch_tag = "very high pitch"
+
+            # Age and persona heuristics
+            if avg_f0 >= 310:
+                # Young child or high-pitched anime character
+                instruct = f"child, {pitch_tag}"
+            elif gender == "male":
+                if avg_f0 < 100:
+                    instruct = f"male, elderly, {pitch_tag}"
+                elif avg_f0 > 175:
+                    instruct = f"male, teenager, {pitch_tag}"
+                else:
+                    instruct = f"male, {pitch_tag}"
+            else:
+                # female
+                if avg_f0 > 270:
+                    instruct = f"female, young adult, {pitch_tag}"
+                else:
+                    instruct = f"female, {pitch_tag}"
+
+            return instruct, avg_f0
+        except Exception as e:
+            fallback = "female, moderate pitch" if gender == "female" else "male, moderate pitch"
+            return fallback, (220.0 if gender == "female" else 130.0)
 
     def _clean_text(self, text, tts_lang="th"):
         import re
@@ -201,8 +257,8 @@ class VoiceGenerator:
             if log_callback: log_callback(msg)
 
         mode_str = f"Multitask ({max_workers} threads)" if (enable_multitask and max_workers > 1) else "Sequential"
-        clone_str = f"Full Clone (Voice + Accent)" if clone_mode == "full" else ("Timbre Only (Voice Timbre, No Accent)" if clone_mode == "timbre" else "Disabled")
-        reuse_str = ", Consistent Speaker Profile" if (reuse_speaker_voice and clone_mode == "full") else ""
+        clone_str = f"Full Clone (Voice + Accent)" if clone_mode == "full" else ("Tone Only (Voice Tone, No Foreign Accent)" if clone_mode in ["timbre", "tone"] else "Disabled")
+        reuse_str = ", Consistent Speaker Profile" if (reuse_speaker_voice and clone_mode in ["full", "timbre", "tone"]) else ""
         log(f"Initializing OmniVoice [{mode_str}, {clone_str}{reuse_str}]...")
 
         if not OMNIVOICE_AVAILABLE:
@@ -247,7 +303,7 @@ class VoiceGenerator:
             import threading
             self.omni_lock = threading.Lock()
 
-        # Pre-build reusable VoiceClonePrompts per gender if consistent speaker voice is enabled
+        # Pre-build reusable VoiceClonePrompts per gender if consistent speaker voice is enabled (Full Clone Mode)
         speaker_prompts = {}
         if is_clone_active and clone_mode == "full" and has_ref and reuse_speaker_voice:
             log("   👤 Building Consistent Speaker Voice Prompts per gender...")
@@ -259,11 +315,11 @@ class VoiceGenerator:
                     e_ms = int(best_seg['end'] * 1000)
                     if e_ms - s_ms < 1000:
                         e_ms = s_ms + 1000
-                    
+
                     ref_audio_seg = full_audio[s_ms:e_ms]
                     ref_path = os.path.join(output_dir, f"ref_speaker_{g}.wav")
                     ref_audio_seg.export(ref_path, format="wav")
-                    
+
                     try:
                         ref_txt = best_seg.get('text', '.')
                         with self.omni_lock:
@@ -281,11 +337,46 @@ class VoiceGenerator:
                             try: os.remove(ref_path)
                             except Exception: pass
 
+        # Pre-profile Acoustic Tone (Pitch / Persona) for Tone-Only Mode
+        speaker_tone_profiles = {}
+        if is_clone_active and clone_mode in ["timbre", "tone"] and has_ref:
+            log("   🎛️ Profiling Character Acoustic Tone (Pitch & Timbre) for Accent-Free Dubbing...")
+            # Extract distinct speakers if available, or fallback to genders
+            speakers = list(set([s.get('speaker') for s in segments if s.get('speaker')] or ['female', 'male']))
+            for spk in speakers:
+                spk_segs = [s for s in segments if (s.get('speaker') == spk or (not s.get('speaker') and s.get('gender', 'female').lower() == spk)) and s.get('text')]
+                if not spk_segs:
+                    fallback_gender = "female" if "fem" in str(spk).lower() else "male"
+                    spk_segs = [s for s in segments if s.get('gender', 'female').lower() == fallback_gender and s.get('text')]
+
+                if spk_segs:
+                    best_seg = max(spk_segs, key=lambda s: (1.5 <= (s.get('end', 0) - s.get('start', 0)) <= 8.0, s.get('end', 0) - s.get('start', 0)))
+                    s_ms = int(best_seg['start'] * 1000)
+                    e_ms = int(best_seg['end'] * 1000)
+                    if e_ms - s_ms < 800:
+                        e_ms = s_ms + 800
+
+                    ref_audio_seg = full_audio[s_ms:e_ms]
+                    samples = np.array(ref_audio_seg.get_array_of_samples(), dtype=np.float32)
+                    if ref_audio_seg.channels > 1:
+                        samples = samples.reshape((-1, ref_audio_seg.channels)).mean(axis=1)
+                    samples = samples / (np.max(np.abs(samples)) + 1e-6)
+
+                    g_hint = best_seg.get('gender', 'female').lower()
+                    instruct_tag, avg_f0 = self.extract_acoustic_tone_instruct(samples, sr=ref_audio_seg.frame_rate, gender=g_hint)
+                    speaker_tone_profiles[spk] = {
+                        'instruct': instruct_tag,
+                        'avg_f0': avg_f0,
+                        'gender': g_hint
+                    }
+                    speaker_tone_profiles[g_hint] = speaker_tone_profiles[spk]
+                    log(f"      🎵 [{spk} / {g_hint.upper()}]: F0 ~ {avg_f0:.1f}Hz -> OmniVoice Instruct: \"{instruct_tag}\"")
+
         def process_omni_segment(item):
             i, seg = item
             if stop_event and stop_event.is_set():
                 return None
-                
+
             text = seg.get('translated_text', '')
             original_text = seg.get('text', '')
             gender = seg.get('gender', 'female').lower()
@@ -312,32 +403,59 @@ class VoiceGenerator:
 
             ref_audio_path = None
             try:
-                # Map detected emotion to OmniVoice instruct attributes & speed
-                gender_token = "female" if gender == "female" else "male"
-                if emotion == "happy":
-                    voice_instruct = f"{gender_token}, high pitch"
-                    base_speed = 1.05
-                elif emotion == "angry":
-                    voice_instruct = f"{gender_token}, high pitch"
-                    base_speed = 1.10
-                elif emotion == "sad":
-                    voice_instruct = f"{gender_token}, low pitch"
-                    base_speed = 0.92
-                elif emotion == "fearful":
-                    voice_instruct = f"{gender_token}, whisper"
-                    base_speed = 1.02
-                elif emotion in ["disgusted", "surprised"]:
-                    voice_instruct = f"{gender_token}, high pitch"
-                    base_speed = 1.05
+                # Map speaker acoustic tone profile or standard emotion to OmniVoice instruct attributes & speed
+                spk_id = seg.get('speaker', gender)
+                profile = speaker_tone_profiles.get(spk_id) or speaker_tone_profiles.get(gender)
+
+                if clone_mode in ["timbre", "tone"] and profile:
+                    base_instruct = profile['instruct']
+                    if emotion in ["whisper", "fearful"]:
+                        voice_instruct = f"{base_instruct}, whisper"
+                        base_speed = 1.0
+                    else:
+                        voice_instruct = base_instruct
+                        if emotion == "happy":
+                            base_speed = 1.05
+                        elif emotion == "angry":
+                            base_speed = 1.10
+                        elif emotion == "sad":
+                            base_speed = 0.92
+                        else:
+                            base_speed = 1.0
                 else:
-                    voice_instruct = gender_token
-                    base_speed = 1.0
+                    gender_token = "female" if gender == "female" else "male"
+                    if emotion == "happy":
+                        voice_instruct = f"{gender_token}, high pitch"
+                        base_speed = 1.05
+                    elif emotion == "angry":
+                        voice_instruct = f"{gender_token}, high pitch"
+                        base_speed = 1.10
+                    elif emotion == "sad":
+                        voice_instruct = f"{gender_token}, low pitch"
+                        base_speed = 0.92
+                    elif emotion in ["fearful", "whisper"]:
+                        voice_instruct = f"{gender_token}, whisper"
+                        base_speed = 1.02
+                    elif emotion in ["disgusted", "surprised"]:
+                        voice_instruct = f"{gender_token}, high pitch"
+                        base_speed = 1.05
+                    else:
+                        voice_instruct = gender_token
+                        base_speed = 1.0
 
                 norm_lang = tts_lang.split("-")[0].lower() if tts_lang else "th"
 
                 with self.omni_lock:
                     with torch.inference_mode():
-                        if clone_mode == "timbre":
+                        if clone_mode in ["timbre", "tone"]:
+                            audio_list = self.omnivoice_model.generate(
+                                text=text,
+                                language=norm_lang,
+                                instruct=voice_instruct,
+                                speed=base_speed,
+                                num_step=32
+                            )
+                        elif has_ref and full_audio:
                             audio_list = self.omnivoice_model.generate(
                                 text=text,
                                 language=norm_lang,

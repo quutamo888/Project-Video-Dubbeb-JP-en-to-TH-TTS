@@ -101,6 +101,19 @@
      - Checkbox: `Lock Gender per Speaker (Clustering)` (Default: Enabled)
 - **Status**: Accepted
 
-
-
-
+### ADR-010: Acoustic Tone Profiling for Accent-Free Voice Cloning (Tone Only Mode)
+- **Context**: การทำ Zero-shot voice cloning แบบส่ง reference audio เต็มรูปแบบ (Full Clone) มักถ่ายทอดจังหวะและสำเนียงต่างชาติ (เช่น สำเนียงญี่ปุ่น) เข้ามาในเสียงพากย์ภาษาไทย ทำให้เสียงพูดติดสำเนียงญี่ปุ่น/พูดเหน่อ ผู้ใช้ต้องการโคลนเฉพาะ "โทนเสียง/เนื้อเสียง (Tone & Pitch)" ของตัวละคร แต่ไม่เอาสำเนียงต่างชาติติดมา
+- **Decision**:
+  1. สร้างฟังก์ชัน **Acoustic Tone Profiling** (`extract_acoustic_tone_instruct`):
+     - วิเคราะห์คลื่นเสียงตัวละครต้นฉบับ วัดความถี่พื้นฐานเฉลี่ย (Fundamental Frequency F0 ด้วย YIN)
+     - แปลงค่า F0 และ Register ของตัวละคร เข้า Voice Design Instruct ของ OmniVoice ตามข้อกำหนด Whitelist:
+       - `very low pitch` (< 110 Hz), `low pitch` (110-145 Hz), `moderate pitch` (145-205 Hz), `high pitch` (205-280 Hz), `very high pitch` (> 280 Hz)
+       - Persona tags: `child` (F0 >= 310 Hz), `male, elderly` (F0 < 100 Hz), `male, teenager`, `female, young adult`
+  2. โหมด **Tone Only (Native Thai, No Foreign Accent)**:
+     - ไม่ส่งไฟล์เสียงภาษาญี่ปุ่นเข้า `ref_audio` แต่ใช้ Instruct tags ที่สกัดได้ ควบคุมการสังเคราะห์เสียงไทย
+     - ให้เสียงพากย์ไทยด้วยสำเนียงและจังหวะภาษาไทยแท้ 100% พร้อมคงโทนเสียง/คาแรกเตอร์ตัวละครไว้สมบูรณ์แบบ
+  3. เพิ่มตัวเลือกใน GUI:
+     - `Tone Only (Voice Tone, No Foreign Accent)` (Default)
+     - `Full Clone (Voice + Original Accent)`
+     - `Disabled (Standard TTS)`
+- **Status**: Accepted

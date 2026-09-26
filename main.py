@@ -78,7 +78,7 @@ def run_pipeline(input_file, output_file, language="th",
         log(f"🌐 Source Audio Lang: {source_lang}")
         log(f"🌐 Target Subtitle Lang: {target_lang}")
         log(f"🌐 Target TTS Voice Lang: {tts_lang}")
-        log(f"🎤 Voice Clone Mode: {clone_mode.upper()} ({'Full Voice+Accent' if clone_mode=='full' else ('Timbre Only, No Accent' if clone_mode=='timbre' else 'Disabled')})")
+        log(f"🎤 Voice Clone Mode: {clone_mode.upper()} ({'Full Voice+Accent' if clone_mode=='full' else ('Tone Only, No Foreign Accent' if clone_mode in ['timbre', 'tone'] else 'Disabled')})")
         log(f"👤 Consistent Speaker Voice: {'Enabled' if reuse_speaker_voice else 'Disabled (Dynamic Per-Sentence)'}")
         log(f"⚡ Multitask: {'Enabled (' + str(max_workers) + ' tasks)' if enable_multitask else 'Disabled (Sequential)'}")
         log("="*50)

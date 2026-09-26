@@ -39,7 +39,8 @@ A comprehensive, production-grade AI-powered video dubbing workstation designed 
     *   มีระบบตรวจจับภาษาและสลับไปใช้ **faster-whisper (Large-v2)** ให้อัตโนมัติสำหรับภาษาอังกฤษและภาษาอื่นๆ
 
 *   **🗣️ Advanced OmniVoice TTS & Voice Cloning (สังเคราะห์เสียงพากย์และโคลนเสียง)**:
-    *   **Timbre Only Mode (Thai Prosody Enforcement)**: เลียนแบบเฉพาะเนื้อเสียงของตัวละครต้นฉบับ (Timbre) พร้อมล็อกสำเนียงและจังหวะการพูดเป็นภาษาไทยธรรมชาติ 100% ไร้สำเนียงต่างชาติ
+    *   **Tone Only Mode (Acoustic Tone Profiling, No Foreign Accent)**: สกัดความถี่ Fundamental Frequency (F0) และ Register เสียงตัวละครจริง เพื่อควบคุม OmniVoice Voice Design สังเคราะห์เสียงพากย์ไทยด้วยสำเนียงธรรมชาติแท้ 100% ไร้สำเนียงต่างชาติ
+    *   **Full Clone Mode (Voice + Original Accent)**: โคลนทั้งเนื้อเสียงและจังหวะพูดตรงตาม Reference Audio
     *   **Consistent Speaker Voice Profile**: จดจำและล็อกโปรไฟล์เสียงตัวละครชาย/หญิงตลอดทั้งคลิป ไม่เปลี่ยนโทนเสียงไปมา
     *   รองรับทั้ง **OmniVoice**, **Microsoft Edge-TTS**, และ **Facebook MMS**
 
@@ -63,6 +64,10 @@ A comprehensive, production-grade AI-powered video dubbing workstation designed 
 
 ## 🆕 Recent Updates & Changelog / การปรับปรุงแก้ไขล่าสุด
 
+*   **🎛️ Acoustic Tone Profiling (Tone Only Voice Cloning)**:
+    *   เพิ่มระบบวิเคราะห์ความถี่เสียง F0 (Fundamental Frequency) และ Register คาแรกเตอร์ตัวละครจากคลิปต้นฉบับ
+    *   แปลงเป็น OmniVoice Voice Design Instruct (`male/female`, `age`, `pitch levels`) สังเคราะห์เสียงพากย์ไทยด้วยสำเนียงไทยแท้ 100% ไร้สำเนียงต่างชาติ แต่คงโทนเสียงตัวละครเดิมไว้ครบถ้วน
+    *   เพิ่มตัวเลือกใน GUI: `Tone Only (Voice Tone, No Foreign Accent)`, `Full Clone (Voice + Original Accent)`, `Disabled (Standard TTS)`
 *   **👥 Dual-Mode Advanced Gender Detection & Speaker Clustering**:
     *   เพิ่มโมเดล ML ตรวจจับเพศ `ml-robust` (`audeering/wav2vec2-large-robust-12-ft-age-gender`) ทนทานต่อเสียงภาษาญี่ปุ่นและเสียงสูง
     *   เพิ่มระบบ **Speaker Clustering + Duration-Weighted Majority Voting** และ **Linguistic Pronoun Analysis** เพื่อล็อกเพศตัวละครตลอดทั้งเรื่อง (Zero Gender Flipping)

@@ -597,10 +597,14 @@ class App(ctk.CTk):
         self.lbl_clone_mode.grid(row=5, column=0, padx=10, pady=5, sticky="w")
         self.combo_clone_mode = ctk.CTkComboBox(
             self.frame_voice,
-            values=["Timbre Only (Voice Only, No Accent)", "Full Clone (Voice + Accent)", "Disabled (Standard TTS)"],
+            values=[
+                "Tone Only (Voice Tone, No Foreign Accent)",
+                "Full Clone (Voice + Original Accent)",
+                "Disabled (Standard TTS)"
+            ],
             state="readonly"
         )
-        self.combo_clone_mode.set("Timbre Only (Voice Only, No Accent)")
+        self.combo_clone_mode.set("Tone Only (Voice Tone, No Foreign Accent)")
         self.combo_clone_mode.grid(row=5, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
 
         # Reuse Speaker Voice Option
@@ -910,9 +914,11 @@ class App(ctk.CTk):
 
         clone_mode_choice = self.combo_clone_mode.get()
         clone_mode_map = {
+            "Tone Only (Voice Tone, No Foreign Accent)": "timbre",
+            "Full Clone (Voice + Original Accent)": "full",
+            "Disabled (Standard TTS)": "disabled",
             "Full Clone (Voice + Accent)": "full",
-            "Timbre Only (Voice Only, No Accent)": "timbre",
-            "Disabled (Standard TTS)": "disabled"
+            "Timbre Only (Voice Only, No Accent)": "timbre"
         }
 
         # Multitask, Clone, Reuse Speaker Voice, and Speaker Clustering selections
@@ -1057,7 +1063,7 @@ class App(ctk.CTk):
         self.lbl_male_val.configure(text="0.0")
         self.slider_fem.set(0)
         self.lbl_fem_val.configure(text="0.0")
-        self.combo_clone_mode.set("Timbre Only (Voice Only, No Accent)")
+        self.combo_clone_mode.set("Tone Only (Voice Tone, No Foreign Accent)")
         self.chk_reuse_speaker.select()
         self.chk_dual_audio.select()
 
