@@ -363,9 +363,9 @@ class GenderClassifier:
 
         # English Gender Markers
         text_lower = text.lower()
-        if re.search(r"\b(i'm a (boy|man|guy)|as a (man|guy|boy))\b", text_lower):
+        if re.search(r"\b(i'm a|i am a|as a)\s+(boy|man|guy)\b", text_lower):
             male_score += 3.0
-        if re.search(r"\b(i'm a (girl|woman|lady)|as a (girl|woman))\b", text_lower):
+        if re.search(r"\b(i'm a|i am a|as a)\s+(girl|woman|lady)\b", text_lower):
             female_score += 3.0
 
         return male_score, female_score
