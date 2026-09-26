@@ -47,11 +47,18 @@ class Config:
     # "visual" - Accurate, face detection from video frames
     # "hybrid" - Visual first, fallback to audio
     GENDER_DETECTION_METHOD = os.getenv("GENDER_DETECTION_METHOD", "audio")
-    
+
     # Audio Gender Model (when using audio detection)
+    # "ml-robust" - audeering/wav2vec2-large-robust-12-ft-age-gender (SOTA multilingual, robust)
+    # "ml-librispeech" - alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech (Legacy)
     # "pitch" - Fast, frequency-based (Hz threshold)
-    # "ml" - Accurate, ML-based (wav2vec2)
-    AUDIO_GENDER_MODEL = os.getenv("AUDIO_GENDER_MODEL", "ml")
+    AUDIO_GENDER_MODEL = os.getenv("AUDIO_GENDER_MODEL", "ml-robust")
+    ROBUST_GENDER_MODEL = os.getenv("ROBUST_GENDER_MODEL", "audeering/wav2vec2-large-robust-12-ft-age-gender")
+    LEGACY_GENDER_MODEL = os.getenv("LEGACY_GENDER_MODEL", "alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech")
+
+    # Speaker Clustering & Consistent Gender
+    # Groups segments by speaker embedding, performs majority voting with linguistic hints to prevent flipping
+    SPEAKER_CLUSTERING_GENDER = os.getenv("SPEAKER_CLUSTERING_GENDER", "true").lower() == "true"
 
     # Output Video Audio Settings
     # true: Preserve original soundtrack (Track 1) and add Thai dubbed (Track 2)

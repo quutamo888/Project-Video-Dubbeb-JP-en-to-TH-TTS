@@ -153,34 +153,39 @@ def run_pipeline(input_file, output_file, language="th",
         else:
             use_visual = False
         
-        if not use_visual or Config.GENDER_DETECTION_METHOD == "hybrid":
-            if hasattr(classifier, 'load_audio'):
-                classifier.load_audio(audio_path)
-            
-        male_count = 0
-        female_count = 0
-        for i, seg in enumerate(segments):
-            if stop_event and stop_event.is_set(): check_stop()
-            
-            gender = 'unknown'
-            
-            if use_visual:
+        if use_visual and Config.GENDER_DETECTION_METHOD == "visual":
+            male_count = 0
+            female_count = 0
+            for i, seg in enumerate(segments):
+                if stop_event and stop_event.is_set(): check_stop()
                 gender = visual_classifier.detect_gender(input_file, seg['start'], seg['end'])
-            
-            if gender == 'unknown' and Config.GENDER_DETECTION_METHOD in ["audio", "hybrid"]:
-                gender = classifier.detect_gender(audio_path, seg['start'], seg['end'])
-            
-            if gender == 'unknown':
-                gender = 'female'
-            
-            seg['gender'] = gender
-            if gender.lower() == "male":
-                male_count += 1
+                if gender == 'unknown':
+                    gender = 'female'
+                seg['gender'] = gender
+                if gender.lower() == "male":
+                    male_count += 1
+                else:
+                    female_count += 1
+                if i % 10 == 0:
+                    progress(0.30 + (0.1 * (i/len(segments))), f"Analyzing seg {i+1}/{len(segments)}")
+        else:
+            use_clustering = getattr(Config, "SPEAKER_CLUSTERING_GENDER", True)
+            if hasattr(classifier, 'analyze_all_segments'):
+                segments = classifier.analyze_all_segments(
+                    audio_path,
+                    segments,
+                    use_clustering=use_clustering,
+                    lang=source_lang,
+                    log_callback=log
+                )
             else:
-                female_count += 1
-            if i % 10 == 0:
-                progress(0.30 + (0.1 * (i/len(segments))), f"Analyzing seg {i+1}/{len(segments)}")
-        
+                for i, seg in enumerate(segments):
+                    if stop_event and stop_event.is_set(): check_stop()
+                    seg['gender'] = classifier.detect_gender(audio_path, seg['start'], seg['end'])
+
+            male_count = sum(1 for s in segments if s.get('gender') == 'male')
+            female_count = len(segments) - male_count
+
         if use_visual:
             visual_classifier.cleanup()
         if hasattr(classifier, 'unload'):

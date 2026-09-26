@@ -637,20 +637,29 @@ class App(ctk.CTk):
         self.lbl_audio_model.grid(row=2, column=0, padx=10, pady=5, sticky="w")
         self.combo_audio_model = ctk.CTkComboBox(
             self.frame_perf,
-            values=["ml (AI, Accurate)", "pitch (Hz, Fast)"],
+            values=[
+                "ml-robust (audeering, Multi-lingual AI)",
+                "ml-librispeech (wav2vec2, Legacy)",
+                "pitch (Hz Frequency, Fast)"
+            ],
             state="readonly"
         )
-        self.combo_audio_model.set("ml (AI, Accurate)")
+        self.combo_audio_model.set("ml-robust (audeering, Multi-lingual AI)")
         self.combo_audio_model.grid(row=2, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
+
+        # Speaker Diarization / Clustering & Majority Voting
+        self.chk_speaker_clustering = ctk.CTkCheckBox(self.frame_perf, text="Lock Gender per Speaker (Clustering)")
+        self.chk_speaker_clustering.select()
+        self.chk_speaker_clustering.grid(row=3, column=0, columnspan=3, padx=10, pady=(4, 6), sticky="w")
 
         # Multitask
         self.chk_multitask = ctk.CTkCheckBox(self.frame_perf, text="Multitask (Step 5 & 6)")
-        self.chk_multitask.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.chk_multitask.grid(row=4, column=0, padx=10, pady=5, sticky="w")
         self.slider_workers = ctk.CTkSlider(self.frame_perf, from_=1, to=16, number_of_steps=15)
         self.slider_workers.set(4)
-        self.slider_workers.grid(row=3, column=1, padx=(6, 2), pady=5, sticky="ew")
+        self.slider_workers.grid(row=4, column=1, padx=(6, 2), pady=5, sticky="ew")
         self.lbl_workers_val = ctk.CTkLabel(self.frame_perf, text="4 Tasks", width=50)
-        self.lbl_workers_val.grid(row=3, column=2, padx=(0, 8), pady=5)
+        self.lbl_workers_val.grid(row=4, column=2, padx=(0, 8), pady=5)
         self.slider_workers.configure(command=lambda val: self.lbl_workers_val.configure(text=f"{int(val)} Tasks"))
 
         # =========================================================
@@ -892,24 +901,28 @@ class App(ctk.CTk):
             "hybrid (Best, Slow)": "hybrid"
         }
         audio_model_map = {
-            "ml (AI, Accurate)": "ml",
+            "ml-robust (audeering, Multi-lingual AI)": "ml-robust",
+            "ml-librispeech (wav2vec2, Legacy)": "ml-librispeech",
+            "pitch (Hz Frequency, Fast)": "pitch",
+            "ml (AI, Accurate)": "ml-robust",
             "pitch (Hz, Fast)": "pitch"
         }
-        
+
         clone_mode_choice = self.combo_clone_mode.get()
         clone_mode_map = {
             "Full Clone (Voice + Accent)": "full",
             "Timbre Only (Voice Only, No Accent)": "timbre",
             "Disabled (Standard TTS)": "disabled"
         }
-        
-        # Multitask, Clone, and Reuse Speaker Voice selections
+
+        # Multitask, Clone, Reuse Speaker Voice, and Speaker Clustering selections
         enable_multitask = bool(self.chk_multitask.get())
         max_workers = int(self.slider_workers.get())
         clone_mode = clone_mode_map.get(clone_mode_choice, "full")
         use_clone = (clone_mode != "disabled")
         reuse_speaker_voice = bool(self.chk_reuse_speaker.get())
         dual_audio = bool(self.chk_dual_audio.get())
+        speaker_clustering = bool(self.chk_speaker_clustering.get())
 
         translator_provider = translator_map.get(translator_choice, "ollama")
         source_lang = source_lang_map.get(source_lang_choice, "auto")
@@ -917,7 +930,7 @@ class App(ctk.CTk):
         tts_provider = tts_map.get(tts_choice, "omnivoice")
         tts_lang = tts_lang_map.get(tts_lang_choice, "th")
         gender_method = gender_map.get(gender_choice, "audio")
-        audio_model = audio_model_map.get(audio_model_choice, "ml")
+        audio_model = audio_model_map.get(audio_model_choice, "ml-robust")
 
         self.btn_start.configure(state="disabled", text="Running...")
         self.btn_stop.configure(state="normal")
@@ -931,7 +944,7 @@ class App(ctk.CTk):
             args=(input_file, output_file, male_pitch, female_pitch, temperature,
                   translator_provider, tts_provider, gender_method, audio_model,
                   source_lang, target_lang, tts_lang, enable_multitask, max_workers, use_clone, clone_mode, reuse_speaker_voice,
-                  stt_engine, dual_audio)
+                  stt_engine, dual_audio, speaker_clustering)
         )
         thread.start()
 
@@ -944,7 +957,7 @@ class App(ctk.CTk):
     def run_process(self, input_file, output_file, male_pitch, female_pitch, temperature,
                     translator_provider, tts_provider, gender_method, audio_model,
                     source_lang, target_lang, tts_lang, enable_multitask, max_workers, use_clone, clone_mode, reuse_speaker_voice,
-                    stt_engine="kotoba-whisper", dual_audio=True):
+                    stt_engine="kotoba-whisper", dual_audio=True, speaker_clustering=True):
         # Temporarily override Config settings with GUI selections
         _apply_torchaudio_patch()
         from config import Config
@@ -960,6 +973,7 @@ class App(ctk.CTk):
         original_clone_mode = Config.OMNIVOICE_CLONE_MODE
         original_reuse_prompt = Config.OMNIVOICE_REUSE_PROMPT
         original_dual_audio = getattr(Config, "DUAL_AUDIO_TRACKS", True)
+        original_clustering = getattr(Config, "SPEAKER_CLUSTERING_GENDER", True)
 
         try:
             # Apply GUI selections
@@ -974,6 +988,7 @@ class App(ctk.CTk):
             Config.OMNIVOICE_CLONE_MODE = clone_mode
             Config.OMNIVOICE_REUSE_PROMPT = reuse_speaker_voice
             Config.DUAL_AUDIO_TRACKS = dual_audio
+            Config.SPEAKER_CLUSTERING_GENDER = speaker_clustering
 
             success = run_pipeline(
                 input_file,
@@ -1016,8 +1031,9 @@ class App(ctk.CTk):
             Config.OMNIVOICE_CLONE_MODE = original_clone_mode
             Config.OMNIVOICE_REUSE_PROMPT = original_reuse_prompt
             Config.DUAL_AUDIO_TRACKS = original_dual_audio
+            Config.SPEAKER_CLUSTERING_GENDER = original_clustering
             self.after(0, lambda: self.reset_buttons())
-            
+
     def reset_buttons(self):
         self.btn_start.configure(state="normal", text="START DUBBING")
         self.btn_stop.configure(state="disabled")
@@ -1047,7 +1063,8 @@ class App(ctk.CTk):
 
         # 4. Reset Gender & Performance
         self.combo_gender.set("audio (Fast, Pitch)")
-        self.combo_audio_model.set("ml (AI, Accurate)")
+        self.combo_audio_model.set("ml-robust (audeering, Multi-lingual AI)")
+        self.chk_speaker_clustering.select()
         self.chk_multitask.deselect()
         self.slider_workers.set(4)
         self.lbl_workers_val.configure(text="4 Tasks")

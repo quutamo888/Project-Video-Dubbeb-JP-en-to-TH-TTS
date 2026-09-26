@@ -84,6 +84,23 @@
   3. ฟังก์ชัน Auto-populate: เมื่อดาวน์โหลดเสร็จ จะกรอกชื่อไฟล์ลงใน `Input Video` และตั้งชื่อไฟล์ `Output Video` ในหน้าหลักให้อัตโนมัติ
 - **Status**: Accepted
 
+### ADR-009: Dual-Mode Advanced Gender Detection (Robust ML & Speaker Clustering with Majority Voting)
+- **Context**: การตรวจจับเพศเสียงเดิมใช้โมเดล `alefiury/wav2vec2...librispeech` (เทรนจาก Audiobooks ภาษาอังกฤษ) มักประเมินเสียงญี่ปุ่น/อนิเมะ/โทนเสียงสูงผิดพลาด และการประเมินทีละประโยคแบบอิสระทำให้ตัวละครเดิมสลับเพศไปมา (Gender Flipping) ส่งผลให้เสียงพากย์ TTS และสรรพนามภาษาไทยเปลี่ยนกลับไปกลับมา
+- **Decision**:
+  1. **Option 1: Robust SOTA ML Model (`audeering/wav2vec2-large-robust-12-ft-age-gender`)**:
+     - รองรับการประเมินเสียงหลากหลายภาษา ทนทานต่อ Noise และอารมณ์/การตะโกนของตัวละคร
+     - ทำ fallback ไปยัง `ml-librispeech` หรือ `pitch (YIN)` หากดาวน์โหลดไม่ได้
+  2. **Option 2: Speaker Clustering & Duration-Weighted Majority Voting with Linguistic Hints**:
+     - สกัด Acoustic Timbre Embedding (MFCCs, spectral contrast, centroid, F0 statistics) แต่ละประโยค
+     - รวมกลุ่มประโยคด้วย Cosine Distance คลัสเตอร์เป็น Speaker IDs (`SPEAKER_00`, `SPEAKER_01`, ...)
+     - ตรวจจับเบาะแสทางภาษา (Linguistic Pronoun Hints): สรรพนามภาษาญี่ปุ่นบ่งบอกเพศชัดเจน (ชาย: `僕`, `俺`, `ぜ`, `ぞ` / หญิง: `あたし`, `かしら`, `わよ`)
+     - ทำ Majority Voting ร่วมกันระหว่างความยาวเสียง (Duration Weight) + ผลลัพธ์ ML Audio + เบาะแสทางภาษา
+     - ล็อกเพศเดียวให้กับทุกประโยคของ Speaker นั้นทั้งคลิป (Zero Gender Flipping)
+  3. เพิ่มตัวเลือกใน GUI:
+     - Dropdown `Audio Model`: `ml-robust (audeering, Multi-lingual AI)`, `ml-librispeech (wav2vec2, Legacy)`, `pitch (Hz Frequency, Fast)`
+     - Checkbox: `Lock Gender per Speaker (Clustering)` (Default: Enabled)
+- **Status**: Accepted
+
 
 
 

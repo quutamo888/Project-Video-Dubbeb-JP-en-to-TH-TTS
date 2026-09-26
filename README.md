@@ -46,6 +46,12 @@ A comprehensive, production-grade AI-powered video dubbing workstation designed 
 *   **📑 Standalone Subtitle Translator (เครื่องมือแปลไฟล์ .srt ในตัว)**:
     *   หน้าต่างเครื่องมือแยกสำหรับแปลไฟล์ซับไตเติล `.srt` โดยเฉพาะ สามารถเลือกใช้โมเดล Qwen2.5-3B หรือ NLLB-200 แล้วบันทึกเป็น `.th.srt` ได้ทันทีโดยไม่ต้องรันทั้งกระบวนการวิดีโอ
 
+*   **👥 Advanced Gender Detection & Speaker Diarization (แยกแยะเพศและล็อกเพศรายตัวละคร)**:
+    *   **Robust ML Model (`audeering/wav2vec2-large-robust-12-ft-age-gender`)**: โมเดล ML ตรวจจับเพศระดับ SOTA ที่เทรนจากเสียงพูดหลากภาษาและเสียงในชีวิตจริง แม่นยำกว่า LibriSpeech ดั้งเดิม ทนทานต่อเสียงอนิเมะและเสียงสูง
+    *   **Speaker Clustering & Majority Voting**: สกัด Acoustic Timbre Embedding แล้วจัดกลุ่มประโยคด้วย Cosine Distance เป็นรายตัวละคร (`SPEAKER_00`, `SPEAKER_01`, ...)
+    *   **Linguistic Pronoun Hints**: วิเคราะห์สรรพนามบอกเพศในประโยคภาษาญี่ปุ่น (`僕`, `俺`, `ぜ`, `ぞ` = ชาย / `あたし`, `かしら`, `わよ` = หญิง) เข้ามาโหวตคะแนนร่วมกับโมเดลเสียง
+    *   **Zero Gender Flipping**: ตัดสินเพศของตัวละครเพียงครั้งเดียว แล้วล็อกเพศให้ทุกประโยคของตัวละครนั้นทั้งคลิป ไม่สลับไปมา
+
 *   **🛡️ Dynamic VRAM Management & OOM Prevention**:
     *   ระบบคืนหน่วยความจำ GPU อัตโนมัติ (Unload โมเดล ML Gender Classifier และ Qwen LLM ทันทีที่ทำงานเสร็จในแต่ละขั้นตอน)
     *   Thread-locking ป้องกันการโหลดโมเดลซ้อนทับกัน ช่วยให้สามารถรันบนการ์ดจอ VRAM 8 GB - 12 GB ได้อย่างราบรื่นโดยไม่เกิด CUDA Out of Memory
@@ -57,6 +63,10 @@ A comprehensive, production-grade AI-powered video dubbing workstation designed 
 
 ## 🆕 Recent Updates & Changelog / การปรับปรุงแก้ไขล่าสุด
 
+*   **👥 Dual-Mode Advanced Gender Detection & Speaker Clustering**:
+    *   เพิ่มโมเดล ML ตรวจจับเพศ `ml-robust` (`audeering/wav2vec2-large-robust-12-ft-age-gender`) ทนทานต่อเสียงภาษาญี่ปุ่นและเสียงสูง
+    *   เพิ่มระบบ **Speaker Clustering + Duration-Weighted Majority Voting** และ **Linguistic Pronoun Analysis** เพื่อล็อกเพศตัวละครตลอดทั้งเรื่อง (Zero Gender Flipping)
+    *   เพิ่มตัวเลือกใน GUI: Dropdown `Audio Model` (Robust ML / LibriSpeech / Pitch) และ Checkbox `Lock Gender per Speaker (Clustering)`
 *   **🎬 YouTube Video Downloader Module**:
     *   เพิ่มโมดูล `modules/youtube_downloader.py` และหน้าต่าง `YouTubeDownloaderWindow` ใน GUI
     *   รองรับการเลือกความละเอียด 1080p, 720p, 480p, 360p, Best และ auto-populate ข้อมูลลงใน Main GUI
